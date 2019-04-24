@@ -1,0 +1,11 @@
+name: fastqc
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  - fastqc
+  - font-ttf-dejavu-sans-mono=2.37  # for FastQC
+  - fontconfig=2.12.6               # for FastQC

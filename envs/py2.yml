@@ -1,0 +1,11 @@
+name: py2
+
+channels:
+  - vladsaveliev
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  - manta
+  - strelka

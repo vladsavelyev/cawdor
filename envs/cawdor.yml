@@ -1,0 +1,53 @@
+name: cawdor
+
+channels:
+  - vladsaveliev
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # ex-bcbio:
+  - bwa
+  - samtools
+  - bedtools
+  - biobambam
+  - ensembl-vep
+  - htslib
+  - gatk4 >=4.1.0.0  # Mutect2, Conpair, PoN
+  - freebayes
+  - vcfanno
+  # post-processing:
+  - python >=3.7
+  - ngs_utils
+  - tsvtools
+  - cython
+  - bcftools >=1.9
+  - vcfanno
+  - vcflib  # for VCF normalisation
+  - bedops
+  - mosdepth
+  - pythonpy
+  - cyvcf2 >=0.10.0
+  - numpy >=1.15.0
+  - pandas
+  - curl >=7.59  # to make sure libcurl.4.dylib>=10.0.0 is installed
+  - versionpy
+  - bed_annotation
+  - multiqc
+  - pyensembl
+  - break-point-inspector
+  - scipy  # Conpair
+  - natsort  # for bcbio.py in ngs_utils
+  - tabix
+  - goleft
+  - awscli
+  - pyasn1  # for awscli - for some reason doesn't install automatically on macos
+  - gsort  # sort vcfs and beds - https://github.com/brentp/gsort
+  - toml  # to read predisposition genes from PCGR toml
+  - pip:
+    - "--editable=git+https://github.com/vladsaveliev/NGS_Utils#egg=ngs_utils"
+    - "--editable=git+https://github.com/vladsaveliev/vcf_stuff#egg=vcf_stuff"
+    - "--editable=git+https://github.com/vladsaveliev/MultiQC#egg=multiqc"
+    - "--editable=git+https://github.com/vladsaveliev/simple_sv_annotation#egg=simple_sv_annotation"
+    - "git+https://github.com/vladsaveliev/Conpair#egg=conpair"
