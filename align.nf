@@ -6,26 +6,26 @@ if (params.help) exit 0, helpMessage()
 
 referenceMap = Utils.defineReferenceMap(params)
 
-if (!Utils.checkExactlyOne([params.test, params.sample, params.sampleDir]))
-  exit 1, 'Please define which samples to work on by providing exactly one of the --test, --sample or --sampleDir options'
+if (!Utils.checkExactlyOne([params.test, params.samples, params.samplesDir]))
+  exit 1, 'Please define which samples to work on by providing exactly one of the --test, --samples or --samplesDir options'
 if (!Utils.checkReferenceMap(referenceMap)) exit 1, 'Missing Reference file(s), see --help for more information'
 
 tsvPath = ''
-if (params.sample) tsvPath = params.sample
+if (params.samples) tsvPath = params.samples
 
 inputFiles = Channel.empty()
 if (tsvPath) {
   tsvFile = file(tsvPath)
   inputFiles = extractSample(tsvFile)
-} else if (params.sampleDir) {
-  inputFiles = extractFastqFromDir(params.sampleDir)
+} else if (params.samplesDir) {
+  inputFiles = extractFastqFromDir(params.samplesDir)
   (inputFiles, fastqTmp) = inputFiles.into(2)
   fastqTmp.toList().subscribe onNext: {
     if (it.size() == 0) {
-      exit 1, "No FASTQ files found in --sampleDir directory '${params.sampleDir}'"
+      exit 1, "No FASTQ files found in --samplesDir directory '${params.samplesDir}'"
     }
   }
-  tsvFile = params.sampleDir  // used in the reports
+  tsvFile = params.samplesDir  // used in the reports
 } else exit 1, 'No sample were defined, see --help'
 
 minimalInformationMessage()
@@ -90,12 +90,7 @@ process MapReads {
   sortCmd = "samtools sort -n -@ ${task.cpus} -m 2G -O sam -"
   dedupCmd = "bamsormadup inputformat=sam threads=${task.cpus} SO=coordinate"
 
-  """
-  touch ${idRun}.bam && touch ${idRun}.bam.bai
-  """
-}
-
-/*  if (Utils.isFq(inputFile1)) {
+  if (Utils.isFq(inputFile1)) {
     """ \
     ${bwaMemCmd} ${inputFile1} ${inputFile2} \
     | ${sortCmd} \
@@ -114,7 +109,7 @@ process MapReads {
     && samtools index ${idRun}.bam \
     """
   }
-} */
+}
 
 if (params.verbose) mappedBam = mappedBam.view {
   "Mapped BAM (single or to be merged):\n\

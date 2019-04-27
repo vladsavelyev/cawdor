@@ -25,11 +25,96 @@ For installation, follow the nextflow and nf-core documentation:
 
 ## Usage
 
-Cawdor consists of several subworkflows. Currently supported map.nf to align reads and get alignment QC, and variants.nf to call somatic SNVs, indels, SVs, and CNVs.
+Cawdor consists of several subworkflows: `align.nf` to align reads and get alignment QC, `somatic.nf` to call somatic variants (SNVs, indels, SVs, and CNVs), `germline.nf` to call germline variants, and `postprocess.nf` to annotate and prioritise variants, generate reports and QC.
 
-Inputs can be either FastQ files or aligned BAM files.
+### Inputs
 
-To run, specify the input directory containing files (can be in subdirectories) with `--sampleDir`, or a TSV file with rows corresponding to samples with `--samples`. Also specify the output dir with `--outDir` and the genome build version with `--genome`
+Input files can be either raw FastQ files or aligned BAM files. To specify input files, you can either provide a directory, or a TSV file.
+
+#### Samples directory
+
+To run, you can specify the input directory with `--sampleDir`. The directory searched recursively for FastQ files that are named `*_R1_*.fastq.gz`, and a matching pair with `_R2_` instead of `_R1_`):
+
+```bash
+nextflow run align.nf --samplesDir /samples
+```
+
+For multiple patiens, organize the foloder into one subfolder for every sample:
+
+```
+ID
++--sample1
++------sample1_lib_flowcell-index_lane_R1_1000.fastq.gz
++------sample1_lib_flowcell-index_lane_R2_1000.fastq.gz
++------sample1_lib_flowcell-index_lane_R1_1000.fastq.gz
++------sample1_lib_flowcell-index_lane_R2_1000.fastq.gz
++--sample2
++------sample2_lib_flowcell-index_lane_R1_1000.fastq.gz
++------sample2_lib_flowcell-index_lane_R2_1000.fastq.gz
++--sample3
++------sample3_lib_flowcell-index_lane_R1_1000.fastq.gz
++------sample3_lib_flowcell-index_lane_R2_1000.fastq.gz
++------sample3_lib_flowcell-index_lane_R1_1000.fastq.gz
++------sample3_lib_flowcell-index_lane_R2_1000.fastq.gz
+```
+
+FastQ filename structure:
+
+- `sample_lib_flowcell-index_lane_R1_1000.fastq.gz` and
+- `sample_lib_flowcell-index_lane_R2_1000.fastq.gz`
+
+Where:
+
+- `sample` = sample id
+- `lib` = indentifier of libaray preparation
+- `flowcell` = identifyer of flow cell for the sequencing run
+- `lane` = identifier of the lane of the sequencing run
+
+Read group information will be parsed from fastq file names according to this:
+
+- `RGID` = "sample_lib_flowcell_index_lane"
+- `RGPL` = "Illumina"
+- `PU` = sample
+- `RGLB` = lib
+
+#### Samples TSV file
+
+Another option is to specify a TSV file with rows corresponding to samples with `--samples`.
+
+```bash
+nextflow run align.nf --samples samples.tsv
+```
+
+The TSV file should have at least one tab-separated line:
+
+```
+SUBJECT_ID_1	0	SAMPLE_1_N	1	/samples/normal1_1.fastq.gz	/samples/normal1_2.fastq.gz
+SUBJECT_ID_1	1	SAMPLE_1_T	3	/samples/tumor1_1.fastq.gz	/samples/tumor1_2.fastq.gz
+SUBJECT_ID_2	0	SAMPLE_2_N	2	/samples/normal2_1.fastq.gz	/samples/normal2_2.fastq.gz
+SUBJECT_ID_2	1	SAMPLE_2_T	4	/samples/tumor2_1.fastq.gz	/samples/tumor2_2.fastq.gz
+```
+
+The columns are:
+
+1. Subject (batch) id
+2. Status: 0 if normal, 1 if tumor
+3. Sample id: actual text representation of the type of the sample
+4. Lane ID - used when the sample is multiplexed on several lanes
+5. First set of reads
+6. Second set of reads
+
+To run from BAM file, create a 5-column TSV file:
+
+```
+SUBJECT_ID_1	0	SAMPLE_1_N	1	/samples/normal_1.bam
+SUBJECT_ID_1	1	SAMPLE_1_T	3	/samples/tumor_1.bam
+SUBJECT_ID_2	0	SAMPLE_2_N	2	/samples/normal_2.bam
+SUBJECT_ID_2	1	SAMPLE_2_T	4	/samples/tumor_2.bam
+```
+
+#### Other options
+
+Also set the output dir with `--outDir`, and the genome build version with `--genome`.
 
 ```
 nextflow run map.nf --sampleDir ../Sarek/Sarek-data/testdata/tiny --outDir Results --genome smallGRCh37
