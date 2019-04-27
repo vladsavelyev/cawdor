@@ -111,8 +111,8 @@ class Utils {
         def bamFile   = Utils.returnFile(row[3])
         def baiFile   = Utils.returnFile(row[4])
 
-        if (!SarekUtils.hasExtension(bamFile,".bam")) exit 1, "File: ${bamFile} has the wrong extension. See --help for more information"
-        if (!SarekUtils.hasExtension(baiFile,".bai")) exit 1, "File: ${baiFile} has the wrong extension. See --help for more information"
+        if (!SarekUtils.hasExtension(bamFile, ".bam")) exit 1, "File: ${bamFile} has the wrong extension. See --help for more information"
+        if (!SarekUtils.hasExtension(baiFile, ".bai")) exit 1, "File: ${baiFile} has the wrong extension. See --help for more information"
 
         return [ idPatient, status, idSample, bamFile, baiFile ]
       }

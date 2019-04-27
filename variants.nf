@@ -38,14 +38,6 @@ bamFiles.choice(bamsTumour, bamsNormal) {it[1] == 0 ? 1 : 0}
 bamsNormal = bamsNormal.ifEmpty{exit 1, "No normal sample defined, check TSV file: ${tsvFile}"}
 bamsTumour = bamsTumour.ifEmpty{exit 1, "No tumour sample defined, check TSV file: ${tsvFile}"}
 
-// Germline variants
-bamsForAscat = Channel.create()
-bamsForSingleManta = Channel.create()
-
-(bamsTumourTemp, bamsTumour) = bamsTumour.into(2)
-(bamsNormalTemp, bamsNormal) = bamsNormal.into(2)
-(bamsForAscat, bamsForSingleManta) = bamsNormalTemp.mix(bamsTumourTemp).into(2)
-
 // Removing status because not relevant anymore
 bamsNormal = bamsNormal.map { idPatient, status, idSample, bam, bai -> [idPatient, idSample, bam, bai] }
 bamsTumour = bamsTumour.map { idPatient, status, idSample, bam, bai -> [idPatient, idSample, bam, bai] }
@@ -120,87 +112,153 @@ if (params.verbose) bedIntervals = bedIntervals.view {
 
 bamsAll = bamsNormal.join(bamsTumor)
 
-// Manta and Strelka
-(bamsForManta, bamsForStrelka, bamsForStrelkaBP, bamsAll) = bamsAll.into(4)
+// Manta, Strelka (no splitting by intervals)
+(bamsForManta, bamsForStrelka, bamsForStrelkaBP, bamsForPurple, bamsAll) = bamsAll.into(5)
 
+// MuTect, VarDict (partitioning by intervals)
 bamsTumorNormalIntervals = bamsAll.spread(bedIntervals)
+(bamsForMutect, bamsForVardict) = bamsTumorNormalIntervals.into(2)
 
-// MuTect2, FreeBayes
-( bamsFMT2, bamsFFB) = bamsTumorNormalIntervals.into(3)
-
-// This will give as a list of unfiltered calls for MuTect2.
-process RunMutect2 {
+// This will give as a list of unfiltered calls for MuTect.
+process RunMutect {
   tag {idSampleTumor + "_vs_" + idSampleNormal + "-" + intervalBed.baseName}
 
   input:
-    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor), file(intervalBed) from bamsFMT2
-    set file(genomeFile), file(genomeIndex), file(genomeDict), file(dbsnp), file(dbsnpIndex) from Channel.value([
-      referenceMap.genomeFile,
+    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor), file(intervalBed) 
+        from bamsForMutect
+    set file(genomeFasta), file(genomeIndex), file(genomeDict), from Channel.value([
+      referenceMap.genomeFasta,
       referenceMap.genomeIndex,
-      referenceMap.genomeDict,
-      referenceMap.dbsnp,
-      referenceMap.dbsnpIndex
+      referenceMap.genomeDict
     ])
 
   output:
-    set val("MuTect2"), idPatient, idSampleNormal, idSampleTumor, file("${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf") into mutect2Output
+    set val("MuTect"), idPatient, idSampleNormal, idSampleTumor, file("${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf") 
+        into mutectOutput
 
-  when: 'mutect2' in tools && !params.onlyQC
+  when: !params.onlyQC
 
   script:
-  """
+  """ \
   gatk --java-options "-Xmx${task.memory.toGiga()}g" \
-    Mutect2 \
-    -R ${genomeFile}\
-    -I ${bamTumor}  -tumor ${idSampleTumor} \
-    -I ${bamNormal} -normal ${idSampleNormal} \
-    -L ${intervalBed} \
-    -O ${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf
+  Mutect2 \
+  -R ${genomeFasta}\
+  -I ${bamTumor}  -tumor ${idSampleTumor} \
+  -I ${bamNormal} -normal ${idSampleNormal} \
+  -L ${intervalBed} \
+  -O ${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf \
   """
 }
-//    --germline_resource af-only-gnomad.vcf.gz \
-//    --normal_panel pon.vcf.gz \
-//    --dbsnp ${dbsnp} \
 
-mutect2Output = mutect2Output.groupTuple(by:[0,1,2,3])
+mutectOutput = mutectOutput.groupTuple(by:[0,1,2,3])
 
 process RunFreeBayes {
   tag {idSampleTumor + "_vs_" + idSampleNormal + "-" + intervalBed.baseName}
 
   input:
-    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor), file(intervalBed) from bamsFFB
-    file(genomeFile) from Channel.value(referenceMap.genomeFile)
+    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor), file(intervalBed) 
+        from bamsFFB
+    file(genomeFasta) from Channel.value(referenceMap.genomeFasta)
     file(genomeIndex) from Channel.value(referenceMap.genomeIndex)
 
   output:
-    set val("FreeBayes"), idPatient, idSampleNormal, idSampleTumor, file("${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf") into freebayesOutput
+    set val("FreeBayes"), idPatient, idSampleNormal, idSampleTumor, file("${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf") 
+        into freebayesOutput
 
-  when: 'freebayes' in tools && !params.onlyQC
+  when: !params.onlyQC
 
   script:
-  """
+  """ \
   freebayes \
-    -f ${genomeFile} \
-    --pooled-continuous \
-    --pooled-discrete \
-    --genotype-qualities \
-    --report-genotype-likelihood-max \
-    --allele-balance-priors-off \
-    --min-alternate-fraction 0.03 \
-    --min-repeat-entropy 1 \
-    --min-alternate-count 2 \
-    -t ${intervalBed} \
-    ${bamTumor} \
-    ${bamNormal} > ${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf
+  -f ${genomeFasta} \
+  --pooled-continuous \
+  --pooled-discrete \
+  --genotype-qualities \
+  --report-genotype-likelihood-max \
+  --allele-balance-priors-off \
+  --min-alternate-fraction 0.03 \
+  --min-repeat-entropy 1 \
+  --min-alternate-count 2 \
+  -t ${intervalBed} \
+  ${bamTumor} \
+  ${bamNormal} > ${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf \
   """
 }
 
 freebayesOutput = freebayesOutput.groupTuple(by:[0,1,2,3])
 
+process RunVarDict {
+  tag {idSampleTumor + "_vs_" + idSampleNormal + "-" + intervalBed.baseName}
+
+  input:
+    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor), file(intervalBed) 
+        from bamsFFB
+    file(genomeFasta) from Channel.value(referenceMap.genomeFasta)
+    file(genomeIndex) from Channel.value(referenceMap.genomeIndex)
+
+  output:
+    set val("VarDict"), idPatient, idSampleNormal, idSampleTumor, file("${intervalBed.baseName}_${idSampleTumor}_vs_${idSampleNormal}.vcf") 
+        into vardictOutput
+
+  when: !params.onlyQC
+
+  script:
+  tmpDir = file("tmp").mkdir()
+  """ \
+  unset JAVA_HOME && \
+  export VAR_DICT_OPTS='-Xms750m -Xmx3000m -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir} && \
+  vardict-java -G ${genomeFasta} \
+  -N ${idSampleNormal} \
+  -b "${bamTumor}|${bamNormal}" \
+  -c 1 -S 2 -E 3 -g 4 --nosv --deldupvar -Q 10 -F 0x700 -f 0.1 \
+  ${intervalBed} \
+  | awk 'NF>=48' \
+  | testsomatic.R \
+  | var2vcf_paired.pl -P 0.9 -m 4.25 -f 0.01 -M  -N "${idSampleTumor}|${idSampleNormal}" \
+  | bcftools filter -m '+' -s 'REJECT' -e 'STATUS !~ ".*Somatic"' \
+  2> /dev/null \
+  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 && FORMAT/SBF[0] < 0.1 && FORMAT/NM[0] >= 2.0' \
+  | bcftools filter -i 'QUAL >= 0' \
+  | sed 's/\\.*Somatic\\/Somatic/' \
+  | sed 's/REJECT,Description=".*">/REJECT,Description="Not Somatic via VarDict">/' \
+  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$4) } {print}' \
+  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
+  | awk -F\$'\t' -v OFS='\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
+  | vcfstreamsort \
+  | bgzip -c > ${vardictOutput} \
+  """
+}
+
+
+process RunVarDictGermline {
+  when: false
+
+  script:
+  tmpDir = file("tmp").mkdir()
+  """ \
+  unset JAVA_HOME && \
+  export VAR_DICT_OPTS='-Xms750m -Xmx3000m -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir} && \
+  vardict-java -G ${genomeFasta} \
+  -N ${idSampleNormal} \
+  -b ${bamNormal} \
+  -c 1 -S 2 -E 3 -g 4 --nosv --deldupvar -Q 10 -F 0x700 -f 0.1 \
+  ${intervalBed} \
+  | teststrandbias.R \
+  | var2vcf_valid.pl -A -N ${idSampleNormal} -E -f 0.1
+  | bcftools filter -i 'QUAL >= 0' \
+  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 && INFO/SBF < 0.1 && INFO/NM >= 2.0' \
+  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$4) } {print}' \
+  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
+  | awk -F\$'\t' -v OFS='\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
+  | vcfstreamsort \
+  | bgzip -c > ${vardictOutput} \
+  """
+}
+
 // we are merging the VCFs that are called separatelly for different intervals
 // so we can have a single sorted VCF containing all the calls for a given caller
 
-vcfsToMerge = mutect2Output.mix(freebayesOutput)
+vcfsToMerge = mutectOutput.mix(vardictOutput)
 if (params.verbose) vcfsToMerge = vcfsToMerge.view {
   "VCFs To be merged:\n\
   Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
@@ -222,7 +280,7 @@ process ConcatVCF {
     set variantCaller, idPatient, idSampleNormal, idSampleTumor, file("*_*.vcf.gz"), file("*_*.vcf.gz.tbi") into vcfConcatenated
     // TODO DRY with ConcatVCF
 
-  when: ( 'mutect2' in tools || 'freebayes' in tools ) && !params.onlyQC
+  when: !params.onlyQC
 
   script:
   outputFile = "${variantCaller}_${idSampleTumor}_vs_${idSampleNormal}.vcf"
@@ -246,8 +304,8 @@ process RunStrelka {
   input:
     set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor) from bamsForStrelka
     file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-    set file(genomeFile), file(genomeIndex), file(genomeDict) from Channel.value([
-      referenceMap.genomeFile,
+    set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
+      referenceMap.genomeFasta,
       referenceMap.genomeIndex,
       referenceMap.genomeDict
     ])
@@ -255,7 +313,7 @@ process RunStrelka {
   output:
     set val("Strelka"), idPatient, idSampleNormal, idSampleTumor, file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaOutput
 
-  when: 'strelka' in tools && !params.onlyQC
+  when: !params.onlyQC
 
   script:
   beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
@@ -265,7 +323,7 @@ process RunStrelka {
   configureStrelkaSomaticWorkflow.py \
   --tumor ${bamTumor} \
   --normal ${bamNormal} \
-  --referenceFasta ${genomeFile} \
+  --referenceFasta ${genomeFasta} \
   ${options} \
   --runDir Strelka
 
@@ -292,16 +350,17 @@ process RunManta {
   input:
     set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor) from bamsForManta
     file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-    set file(genomeFile), file(genomeIndex) from Channel.value([
-      referenceMap.genomeFile,
+    set file(genomeFasta), file(genomeIndex) from Channel.value([
+      referenceMap.genomeFasta,
       referenceMap.genomeIndex
     ])
 
   output:
     set val("Manta"), idPatient, idSampleNormal, idSampleTumor, file("*.vcf.gz"), file("*.vcf.gz.tbi") into mantaOutput
-    set idPatient, idSampleNormal, idSampleTumor, file("*.candidateSmallIndels.vcf.gz"), file("*.candidateSmallIndels.vcf.gz.tbi") into mantaToStrelka
+    set idPatient, idSampleNormal, idSampleTumor, file("*.candidateSmallIndels.vcf.gz"), file("*.candidateSmallIndels.vcf.gz.tbi") 
+        into mantaToStrelka
 
-  when: 'manta' in tools && !params.onlyQC
+  when: !params.strelkaBP && !params.onlyQC
 
   script:
   beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
@@ -311,7 +370,7 @@ process RunManta {
   configManta.py \
   --normalBam ${bamNormal} \
   --tumorBam ${bamTumor} \
-  --reference ${genomeFile} \
+  --reference ${genomeFasta} \
   ${options} \
   --runDir Manta
 
@@ -343,59 +402,6 @@ if (params.verbose) mantaOutput = mantaOutput.view {
   Index : ${it[5].fileName}"
 }
 
-process RunSingleManta {
-  tag {idSample + " - Tumor-Only"}
-
-  publishDir "${params.outDir}/VariantCalling/${idPatient}/Manta", mode: params.publishDirMode
-
-  input:
-    set idPatient, status, idSample, file(bam), file(bai) from bamsForSingleManta
-    file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-    set file(genomeFile), file(genomeIndex) from Channel.value([
-      referenceMap.genomeFile,
-      referenceMap.genomeIndex
-    ])
-
-  output:
-    set val("Manta"), idPatient, idSample,  file("*.vcf.gz"), file("*.vcf.gz.tbi") into singleMantaOutput
-
-  when: 'manta' in tools && status == 1 && !params.onlyQC
-
-  script:
-  beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
-  options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
-  """
-  ${beforeScript}
-  configManta.py \
-  --tumorBam ${bam} \
-  --reference ${genomeFile} \
-  ${options} \
-  --runDir Manta
-
-  python Manta/runWorkflow.py -m local -j ${task.cpus}
-
-  mv Manta/results/variants/candidateSmallIndels.vcf.gz \
-    Manta_${idSample}.candidateSmallIndels.vcf.gz
-  mv Manta/results/variants/candidateSmallIndels.vcf.gz.tbi \
-    Manta_${idSample}.candidateSmallIndels.vcf.gz.tbi
-  mv Manta/results/variants/candidateSV.vcf.gz \
-    Manta_${idSample}.candidateSV.vcf.gz
-  mv Manta/results/variants/candidateSV.vcf.gz.tbi \
-    Manta_${idSample}.candidateSV.vcf.gz.tbi
-  mv Manta/results/variants/tumorSV.vcf.gz \
-    Manta_${idSample}.tumorSV.vcf.gz
-  mv Manta/results/variants/tumorSV.vcf.gz.tbi \
-    Manta_${idSample}.tumorSV.vcf.gz.tbi
-  """
-}
-
-if (params.verbose) singleMantaOutput = singleMantaOutput.view {
-  "Variant Calling output:\n\
-  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: ${it[2]}\n\
-  Files : ${it[3].fileName}\n\
-  Index : ${it[4].fileName}"
-}
-
 // Running Strelka Best Practice with Manta indel candidates
 // For easier joining, remaping channels to idPatient, idSampleNormal, idSampleTumor...
 
@@ -413,10 +419,11 @@ process RunStrelkaBP {
   publishDir "${params.outDir}/VariantCalling/${idPatient}/Strelka", mode: params.publishDirMode
 
   input:
-    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor), file(mantaCSI), file(mantaCSIi) from bamsForStrelkaBP
+    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor), 
+        file(mantaCSI), file(mantaCSIi) from bamsForStrelkaBP
     file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-    set file(genomeFile), file(genomeIndex), file(genomeDict) from Channel.value([
-      referenceMap.genomeFile,
+    set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
+      referenceMap.genomeFasta,
       referenceMap.genomeIndex,
       referenceMap.genomeDict
     ])
@@ -424,17 +431,17 @@ process RunStrelkaBP {
   output:
     set val("Strelka"), idPatient, idSampleNormal, idSampleTumor, file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaBPOutput
 
-  when: 'strelka' in tools && 'manta' in tools && params.strelkaBP && !params.onlyQC
+  when: params.strelkaBP && !params.onlyQC
 
   script:
   beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
   options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
-  """
+  """ \
   ${beforeScript}
   configureStrelkaSomaticWorkflow.py \
   --tumor ${bamTumor} \
   --normal ${bamNormal} \
-  --referenceFasta ${genomeFile} \
+  --referenceFasta ${genomeFasta} \
   --indelCandidates ${mantaCSI} \
   ${options} \
   --runDir Strelka
@@ -459,22 +466,25 @@ if (params.verbose) strelkaBPOutput = strelkaBPOutput.view {
   Index : ${it[5].fileName}"
 }
 
-// Run commands and code from Malin Larsson
-// Based on Jesper Eisfeldt's code
-process RunAlleleCount {
-  tag {idSample}
+// TODO: wrap PURPLE into a single tool. Or better not? Easier to rerun parts
+process RunAmber {
+  tag {idSampleTumor + "_vs_" + idSampleNormal}
 
   input:
-    set idPatient, status, idSample, file(bam), file(bai) from bamsForAscat
-    set file(acLoci), file(genomeFile), file(genomeIndex), file(genomeDict) from Channel.value([
+    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumor, file(bamTumor), file(baiTumor) from 
+
+    set idPatient, status, idSample, file(bam), file(bai) from bamsForPurple
+    set file(acLoci), file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
       referenceMap.acLoci,
-      referenceMap.genomeFile,
+      referenceMap.genomeFasta,
       referenceMap.genomeIndex,
       referenceMap.genomeDict
     ])
 
   output:
-    set idPatient, status, idSample, file("${idSample}.alleleCount") into alleleCountOutput
+        'work/{batch}/purple/amber/{batch}.amber.baf',
+        'work/{batch}/purple/amber/{batch}.amber.baf.pcf',
+    set idPatient, status, idSample, file("${idSample}.amber.baf"), file("${idSample}.amber.baf") into amberOutput
 
   when: 'ascat' in tools && !params.onlyQC
 
@@ -482,7 +492,7 @@ process RunAlleleCount {
   """
   alleleCounter \
   -l ${acLoci} \
-  -r ${genomeFile} \
+  -r ${genomeFasta} \
   -b ${bam} \
   -o ${idSample}.alleleCount;
   """
@@ -513,7 +523,8 @@ process RunConvertAlleleCounts {
     set idPatient, idSampleNormal, idSampleTumor, file(alleleCountNormal), file(alleleCountTumor) from alleleCountOutput
 
   output:
-    set idPatient, idSampleNormal, idSampleTumor, file("${idSampleNormal}.BAF"), file("${idSampleNormal}.LogR"), file("${idSampleTumor}.BAF"), file("${idSampleTumor}.LogR") into convertAlleleCountsOutput
+    set idPatient, idSampleNormal, idSampleTumor, file("${idSampleNormal}.BAF"), file("${idSampleNormal}.LogR"), 
+        file("${idSampleTumor}.BAF"), file("${idSampleTumor}.LogR") into convertAlleleCountsOutput
 
   when: 'ascat' in tools && !params.onlyQC
 
@@ -708,7 +719,7 @@ def minimalInformationMessage() {
   log.info "  acLociGC    :\n\t" + referenceMap.acLociGC
   log.info "  dbsnp       :\n\t" + referenceMap.dbsnp
   log.info "\t" + referenceMap.dbsnpIndex
-  log.info "  genome      :\n\t" + referenceMap.genomeFile
+  log.info "  genome      :\n\t" + referenceMap.genomeFasta
   log.info "\t" + referenceMap.genomeDict
   log.info "\t" + referenceMap.genomeIndex
   log.info "  intervals   :\n\t" + referenceMap.intervals

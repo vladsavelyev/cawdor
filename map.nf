@@ -45,6 +45,29 @@ if (params.verbose) inputFiles = inputFiles.view {
   Files : [${it[4].fileName}, ${it[5].fileName}]"
 }
 
+process FastQC {
+  tag {idPatient + "-" + idRun}
+
+  publishDir "${params.outDir}/QC/FastQC/${idRun}", mode: params.publishDirMode
+
+  input: 
+    set idPatient, status, idSample, idRun, file(inputFile1), file(inputFile2) from inputFilesforFastQC
+
+  output:
+    file "*_fastqc.{zip,html}" into fastQCreport
+
+  script:
+  inputFiles = Utils.isFq(inputFile1) ? "${inputFile1} ${inputFile2}" : "${inputFile1}"
+  """
+  fastqc -t 2 -q ${inputFiles}
+  """
+}
+
+if (params.verbose) fastQCreport = fastQCreport.view {
+  "FastQC report:\n\
+  Files : [${it[0].fileName}, ${it[1].fileName}]"
+}
+
 process MapReads {
   tag {idPatient + "-" + idRun}
 
@@ -67,13 +90,18 @@ process MapReads {
   sortCmd = "samtools sort -n -@ ${task.cpus} -m 2G -O sam -"
   dedupCmd = "bamsormadup inputformat=sam threads=${task.cpus} SO=coordinate"
 
-  if (Utils.isFq(inputFile1)) {
+  """
+  touch ${idRun}.bam && touch ${idRun}.bam.bai
+  """
+}
+
+/*  if (Utils.isFq(inputFile1)) {
     """ \
     ${bwaMemCmd} ${inputFile1} ${inputFile2} \
     | ${sortCmd} \
     | ${dedupCmd} \
     > ${idRun}.bam \
-    && samtools index ${idRun}.bam
+    && samtools index ${idRun}.bam \
     """
   } else if (SarekUtils.hasExtension(inputFile1, "bam")) {
     """ \
@@ -83,10 +111,10 @@ process MapReads {
     | ${sortCmd} \
     | ${dedupCmd} \
     > ${idRun}.bam \
-    && samtools index ${idRun}.bam
+    && samtools index ${idRun}.bam \
     """
   }
-}
+} */
 
 if (params.verbose) mappedBam = mappedBam.view {
   "Mapped BAM (single or to be merged):\n\
@@ -106,8 +134,8 @@ process RunSamtoolsStats {
     file ("${bam}.stats.txt") into samtoolsStatsReport
 
   script:
-  """
-  samtools stats ${bam} > ${bam}.stats.txt
+  """ \
+  samtools stats ${bam} > ${bam}.stats.txt \
   """
 }
 
