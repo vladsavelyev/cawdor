@@ -229,7 +229,7 @@ process RunVarDict {
   | awk -F\$'\\t' -v OFS='\\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
   | awk -F\$'\\t' -v OFS='\\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
   | vcfstreamsort \
-  | > "${idPatient}-${intervalBed.baseName}.vcf" \
+  > "${idPatient}-${intervalBed.baseName}.vcf" \
   """
 }
 
