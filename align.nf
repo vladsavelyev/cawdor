@@ -81,8 +81,7 @@ process MapReads {
 
   script:
   CN = ""
-  if (params.containsKey("sequencing_center"))
-    CN = "CN:${params.sequencing_center}\\t"
+  if (params.containsKey("sequencing_center")) CN = "CN:${params.sequencing_center}\\t"
   readGroup = "@RG\\tID:${idRun}\\t${CN}PU:${idRun}\\tSM:${idSample}\\tLB:${idSample}\\tPL:illumina"
   // adjust mismatch penalty for tumor samples
   extra = status == 1 ? "-B 3" : ""
@@ -175,7 +174,7 @@ process MarkDuplicates {
 
   output:
     set idPatient, idSample, file("${idSample}.dedup.bam"), file("${idSample}.dedup.bai") into duplicateMarkedBams
-    set idPatient, status, idSample, val("${idSample}.dedup.bam"), val("${idSample}.dedup.bam.bai") into samplesTsv
+    set idPatient, status, idSample, val("${idSample}.dedup.bam"), val("${idSample}.dedup.bai") into samplesTsv
     file ("${idSample}.dedup_metrics.txt") into markDuplicatesReport
 
   when: !params.onlyQC

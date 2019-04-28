@@ -9,3 +9,6 @@ channels:
 dependencies:
   - manta
   - strelka
+  - bcftools
+  - vcflib
+  - tabix

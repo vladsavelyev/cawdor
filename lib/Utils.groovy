@@ -93,12 +93,12 @@ class Utils {
     Channel.from(tsvFile)
       .splitCsv(sep: '\t')
       .map { row ->
-        Utils.checkNumberOfItem(row, 4)
+        Utils.checkNumberOfItem(row, 5)
         def idPatient = row[0]
         def status    = Utils.returnStatus(row[1].toInteger())
         def idSample  = row[2]
         def bamFile   = Utils.returnFile(row[3])
-        def baiFile   = bamFile + ".bai"
+        def baiFile   = Utils.returnFile(row[4])
 
         if (!Utils.hasExtension(bamFile, ".bam")) exit 1, "File: ${bamFile} has the wrong extension. See --help for more information"
         if (!Utils.hasExtension(baiFile, ".bai")) exit 1, "File: ${baiFile} has the wrong extension. See --help for more information"

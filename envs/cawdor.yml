@@ -16,7 +16,7 @@ dependencies:
   - ensembl-vep
   - htslib
   - gatk4 >=4.1.0.0  # Mutect2, Conpair, PoN
-  - vardict
+  - vardict-java
   - vcfanno
   # post-processing:
   - python >=3.7
@@ -25,7 +25,7 @@ dependencies:
   - cython
   - bcftools >=1.9
   - vcfanno
-  - vcflib  # for VCF normalisation
+  - vcflib  # for VarDict and VCF normalisation
   - bedops
   - mosdepth
   - pythonpy

@@ -57,23 +57,6 @@ bamsTumour = bamsTumour.map { idPatient, status, idSample, bam, bai -> [idPatien
 // Do variant calling by this intervals, and re-merge the VCFs.
 // Since we are on a cluster or a multi-CPU machine, this can parallelize the
 // variant call processes and push down the variant call wall clock time significanlty.
-
-params.str = 'Hello world!'
-
-//process splitLetters {
-//
-//  output:
-//  file 'chunk_*' into letters mode flatten
-//
-//  """
-//  printf '${params.str}' | split -b 6 - chunk_
-//  """
-//}
-//
-//if (params.verbose) letters = letters.view {
-//  "  Letter: ${it.baseName}"
-//}
-
 process CreateIntervalBeds {
   tag {intervals.fileName}
 
@@ -147,7 +130,7 @@ bamsTumourNormalIntervals = bamsAll.combine(bedIntervals)  // cartesian product 
 
 // This will give as a list of unfiltered calls for MuTect.
 process RunMutect {
-  tag {idSampleTumour + "_vs_" + idSampleNormal + "-" + intervalBed.baseName}
+  tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
 
   input:
     set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
@@ -155,8 +138,8 @@ process RunMutect {
     set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([genomeFasta, genomeIndex, genomeDict])
 
   output:
-    set val("MuTect"), idPatient, idSampleNormal, idSampleTumour, file("${intervalBed.baseName}_${idSampleTumour}_vs_${idSampleNormal}.vcf") \
-        into mutectOutput
+    set val("MuTect"), idPatient, idSampleNormal, idSampleTumour,
+            file("${idPatient}-${intervalBed.baseName}.vcf") into mutectOutput
 
   when: !params.onlyQC
 
@@ -168,7 +151,7 @@ process RunMutect {
   -I ${bamTumour}  -tumor ${idSampleTumour} \
   -I ${bamNormal} -normal ${idSampleNormal} \
   -L ${intervalBed} \
-  -O ${intervalBed.baseName}_${idSampleTumour}_vs_${idSampleNormal}.vcf \
+  -O ${idPatient}-${intervalBed.baseName}.vcf \
   """
 }
 
@@ -208,50 +191,48 @@ mutectOutput = mutectOutput.groupTuple(by:[0,1,2,3])
 //}
 //
 //freebayesOutput = freebayesOutput.groupTuple(by:[0,1,2,3])
-//
-//process RunVarDict {
-//  tag {idSampleTumour + "_vs_" + idSampleNormal + "-" + intervalBed.baseName}
-//
-//  input:
-//    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) \
-//        from bamsForVardict
-//    file(genomeFasta) from Channel.value(genomeFasta)
-//    file(genomeIndex) from Channel.value(genomeIndex)
-//
-//  output:
-//    set val("VarDict"), idPatient, idSampleNormal, idSampleTumour, file("${intervalBed.baseName}_${idSampleTumour}_vs_${idSampleNormal}.vcf") \
-//        into vardictOutput
-//
-//  when: !params.onlyQC
-//
-//  script:
-//  tmpDir = file("tmp").mkdir()
-//  """ \
-//  unset JAVA_HOME && \
-//  export VAR_DICT_OPTS='-Xms750m -Xmx3000m -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir} && \
-//  vardict-java -G ${genomeFasta} \
-//  -N ${idSampleNormal} \
-//  -b "${bamTumour}|${bamNormal}" \
-//  -c 1 -S 2 -E 3 -g 4 --nosv --deldupvar -Q 10 -F 0x700 -f 0.1 \
-//  ${intervalBed} \
-//  | awk 'NF>=48' \
-//  | testsomatic.R \
-//  | var2vcf_paired.pl -P 0.9 -m 4.25 -f 0.01 -M  -N "${idSampleTumour}|${idSampleNormal}" \
-//  | bcftools filter -m '+' -s 'REJECT' -e 'STATUS !~ ".*Somatic"' \
-//  2> /dev/null \
-//  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 && FORMAT/SBF[0] < 0.1 && FORMAT/NM[0] >= 2.0' \
-//  | bcftools filter -i 'QUAL >= 0' \
-//  | sed 's/\\.*Somatic\\/Somatic/' \
-//  | sed 's/REJECT,Description=".*">/REJECT,Description="Not Somatic via VarDict">/' \
-//  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$4) } {print}' \
-//  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
-//  | awk -F\$'\t' -v OFS='\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
-//  | vcfstreamsort \
-//  | bgzip -c > ${vardictOutput} \
-//  """
-//}
-//
-//
+
+process RunVarDict {
+  tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
+
+  input:
+    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
+                   idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForVardict
+    file(genomeFasta) from Channel.value(genomeFasta)
+    file(genomeIndex) from Channel.value(genomeIndex)
+
+  output:
+    set val("VarDict"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf") into vardictOutput
+
+  when: !params.onlyQC
+
+  script:
+  tmpDir = file("tmp").mkdir()
+  """ \
+  unset JAVA_HOME && \
+  export VAR_DICT_OPTS='-Xms750m -Xmx3000m -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir}' && \
+  vardict-java -G ${genomeFasta} \
+  -N ${idSampleNormal} \
+  -b "${bamTumour}|${bamNormal}" \
+  -c 1 -S 2 -E 3 -g 4 --nosv --deldupvar -Q 10 -F 0x700 -f 0.1 \
+  ${intervalBed} \
+  | awk 'NF>=48' \
+  | testsomatic.R \
+  | var2vcf_paired.pl -P 0.9 -m 4.25 -f 0.01 -M  -N "${idSampleTumour}|${idSampleNormal}" \
+  | bcftools filter -m '+' -s 'REJECT' -e 'STATUS !~ ".*Somatic"' \
+  2> /dev/null \
+  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 && FORMAT/SBF[0] < 0.1 && FORMAT/NM[0] >= 2.0' \
+  | bcftools filter -i 'QUAL >= 0' \
+  | sed 's/\\\\.*Somatic\\\\/Somatic/' \
+  | sed 's/REJECT,Description=".*">/REJECT,Description="Not Somatic via VarDict">/' \
+  | awk -F\$'\\t' -v OFS='\\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$4) } {print}' \
+  | awk -F\$'\\t' -v OFS='\\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
+  | awk -F\$'\\t' -v OFS='\\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
+  | vcfstreamsort \
+  | > "${idPatient}-${intervalBed.baseName}.vcf" \
+  """
+}
+
 //process RunVarDictGermline {
 //  when: false
 //
@@ -277,47 +258,47 @@ mutectOutput = mutectOutput.groupTuple(by:[0,1,2,3])
 //  """
 //}
 //
-//// we are merging the VCFs that are called separatelly for different intervals
-//// so we can have a single sorted VCF containing all the calls for a given caller
-//
-//vcfsToMerge = mutectOutput.mix(vardictOutput)
-//if (params.verbose) vcfsToMerge = vcfsToMerge.view {
-//  "VCFs To be merged:\n\
-//  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
-//  Files : ${it[4].fileName}"
-//}
-//
-//process ConcatVCF {
-//  tag {variantCaller + "_" + idSampleTumour + "_vs_" + idSampleNormal}
-//
-//  publishDir "${params.outDir}/VariantCalling/${idPatient}/${"$variantCaller"}", mode: params.publishDirMode
-//
-//  input:
-//    set variantCaller, idPatient, idSampleNormal, idSampleTumour, file(vcFiles) from vcfsToMerge
-//    file(genomeIndex) from Channel.value(genomeIndex)
-//    file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-//
-//  output:
-//    // we have this funny *_* pattern to avoid copying the raw calls to publishdir
-//    set variantCaller, idPatient, idSampleNormal, idSampleTumour, file("*_*.vcf.gz"), file("*_*.vcf.gz.tbi") into vcfConcatenated
-//    // TODO DRY with ConcatVCF
-//
-//  when: !params.onlyQC
-//
-//  script:
-//  outputFile = "${variantCaller}_${idSampleTumour}_vs_${idSampleNormal}.vcf"
-//  options = params.targetBED ? "-t ${targetBED}" : ""
-//  """
-//  concatenateVCFs.sh -i ${genomeIndex} -c ${task.cpus} -o ${outputFile} ${options}
-//  """
-//}
-//
-//if (params.verbose) vcfConcatenated = vcfConcatenated.view {
-//  "Variant Calling output:\n\
-//  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
-//  File  : ${it[4].fileName}"
-//}
-//
+
+// we are merging the VCFs that are called separately for different intervals
+// so we can have a single sorted VCF containing all the calls for a given caller
+vcfsToConcat = mutectOutput.mix(vardictOutput)
+if (params.verbose) vcfsToConcat = vcfsToConcat.view {
+  "Interval VCFs to be concatenated:\n\
+  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
+  Files : ${it[4].fileName}"
+}
+
+process ConcatVCFbyInterval {
+  tag {idPatient + "-" + variantCaller}
+
+  publishDir "${params.outDir}/VariantCalling/${idPatient}/${"$variantCaller"}", mode: params.publishDirMode
+
+  input:
+    set variantCaller, idPatient, idSampleNormal, idSampleTumour, file(vcFiles) from vcfsToConcat
+    file(genomeIndex) from Channel.value(genomeIndex)
+    file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
+
+  output:
+    set variantCaller, idPatient, idSampleNormal, idSampleTumour,
+            file("${idPatient}-${variantCaller}.vcf.gz"),
+            file("${idPatient}-${variantCaller}.vcf.gz.tbi") into vcfConcatenated
+
+  when: !params.onlyQC
+
+  script:
+  outputFile = "${idPatient}-${variantCaller}.vcf"
+  options = params.targetBED ? "-t ${targetBED}" : ""
+  """
+  concatenateVCFs.sh -i ${genomeIndex} -c ${task.cpus} -o ${outputFile} ${options}
+  """
+}
+
+if (params.verbose) vcfConcatenated = vcfConcatenated.view {
+  "Variant Calling output:\n\
+  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
+  File  : ${it[4].fileName}"
+}
+
 //process RunStrelka {
 //  tag {idSampleTumour + "_vs_" + idSampleNormal}
 //
