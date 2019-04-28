@@ -1,23 +1,22 @@
 #!/usr/bin/env nextflow
 
-import Utils
-
 if (params.help) exit 0, helpMessage()
 
-referenceMap = Utils.defineReferenceMap(params)
-
-if (!Utils.checkExactlyOne([params.test, params.samples, params.samplesDir]))
+if (!Utils.checkExactlyOne([params.test, params.containsKey("samples"), params.containsKey("samplesDir")]))
   exit 1, 'Please define which samples to work on by providing exactly one of the --test, --samples or --samplesDir options'
-if (!Utils.checkReferenceMap(referenceMap)) exit 1, 'Missing Reference file(s), see --help for more information'
 
-tsvPath = ''
-if (params.samples) tsvPath = params.samples
+genomeFasta = Utils.findRefFile(params, 'genomeFasta')
+genomeIndex = Utils.findRefFile(params, 'genomeIndex')
+genomeDict  = Utils.findRefFile(params, 'genomeDict')
+bwaIndex    = Utils.findRefFile(params, 'bwaIndex')
+if (![genomeFasta, genomeIndex, genomeDict, bwaIndex].every())
+  exit 1, "Missing reference files for alignment. See --help for more information"
 
 inputFiles = Channel.empty()
-if (tsvPath) {
-  tsvFile = file(tsvPath)
-  inputFiles = extractSample(tsvFile)
-} else if (params.samplesDir) {
+if (params.containsKey("samples")) {
+  inputPath = file(params.samples)
+  inputFiles = extractSample(inputPath)
+} else if (params.containsKey("samplesDir")) {
   inputFiles = extractFastqFromDir(params.samplesDir)
   (inputFiles, fastqTmp) = inputFiles.into(2)
   fastqTmp.toList().subscribe onNext: {
@@ -25,8 +24,8 @@ if (tsvPath) {
       exit 1, "No FASTQ files found in --samplesDir directory '${params.samplesDir}'"
     }
   }
-  tsvFile = params.samplesDir  // used in the reports
-} else exit 1, 'No sample were defined, see --help'
+  inputPath = params.samplesDir  // used in the reports
+} else exit 1, 'No samples were defined with either --samples input.tsv or --samplesDir /input_dir, see --help'
 
 minimalInformationMessage()
 
@@ -48,9 +47,9 @@ if (params.verbose) inputFiles = inputFiles.view {
 process FastQC {
   tag {idPatient + "-" + idRun}
 
-  publishDir "${params.outDir}/QC/FastQC/${idRun}", mode: params.publishDirMode
+  publishDir "${params.outDir}/Reports/FastQC/${idRun}", mode: params.publishDirMode
 
-  input: 
+  input:
     set idPatient, status, idSample, idRun, file(inputFile1), file(inputFile2) from inputFilesforFastQC
 
   output:
@@ -73,30 +72,29 @@ process MapReads {
 
   input:
     set idPatient, status, idSample, idRun, file(inputFile1), file(inputFile2) from inputFiles
-    set file(genomeFasta), file(bwaIndex) from Channel.value([referenceMap.genomeFasta, referenceMap.bwaIndex])
+    set file(genomeFasta), file(bwaIndex) from Channel.value([genomeFasta, bwaIndex])
 
   output:
-    set idPatient, status, idSample, idRun, file("${idRun}.bam"), file("${idRun}.bam.bai") into (mappedBam, mappedBamForQC)
+    set idPatient, status, idSample, idRun, file("${idRun}.bam") into (mappedBam, mappedBamForQC)
 
   when: !params.onlyQC
 
   script:
-  CN = params.sequencing_center ? "CN:${params.sequencing_center}\\t" : ""
+  CN = ""
+  if (params.containsKey("sequencing_center"))
+    CN = "CN:${params.sequencing_center}\\t"
   readGroup = "@RG\\tID:${idRun}\\t${CN}PU:${idRun}\\tSM:${idSample}\\tLB:${idSample}\\tPL:illumina"
   // adjust mismatch penalty for tumor samples
   extra = status == 1 ? "-B 3" : ""
 
   bwaMemCmd = "bwa mem -K 100000000 -p -R \"${readGroup}\" ${extra} -t ${task.cpus} -M ${genomeFasta}"
-  sortCmd = "samtools sort -n -@ ${task.cpus} -m 2G -O sam -"
-  dedupCmd = "bamsormadup inputformat=sam threads=${task.cpus} SO=coordinate"
+  sortCmd = "samtools sort -@ ${task.cpus} -m 2G -"
 
   if (Utils.isFq(inputFile1)) {
     """ \
     ${bwaMemCmd} ${inputFile1} ${inputFile2} \
     | ${sortCmd} \
-    | ${dedupCmd} \
-    > ${idRun}.bam \
-    && samtools index ${idRun}.bam \
+    > ${idRun}.bam
     """
   } else if (SarekUtils.hasExtension(inputFile1, "bam")) {
     """ \
@@ -104,11 +102,57 @@ process MapReads {
     | bedtools bamtofastq -i /dev/stdin -fq /dev/stdout -fq2 /dev/stdout \
     | ${bwaMemCmd} \
     | ${sortCmd} \
-    | ${dedupCmd} \
-    > ${idRun}.bam \
-    && samtools index ${idRun}.bam \
+    > ${idRun}.bam
     """
   }
+}
+
+// Sort bam whether they are standalone or should be merged
+// Borrowed code from https://github.com/guigolab/chip-nf
+singleBam = Channel.create()
+groupedBam = Channel.create()
+mappedBam.groupTuple(by:[0,1,2])
+  .choice(singleBam, groupedBam) {it[2].size() > 1 ? 1 : 0}
+singleBam = singleBam.map {
+  idPatient, status, idSample, idRun, bam ->
+  [idPatient, status, idSample, bam]
+}
+
+process MergeBams {
+  tag {idPatient + "-" + idSample}
+
+  input:
+    set idPatient, status, idSample, idRun, file(bam) from groupedBam
+
+  output:
+    set idPatient, status, idSample, file("${idSample}.bam") into mergedBam
+
+  when: !params.onlyQC
+
+  script:
+  """
+  samtools merge --threads ${task.cpus} ${idSample}.bam ${bam}
+  """
+}
+
+if (params.verbose) singleBam = singleBam.view {
+  "Single BAM:\n\
+  ID    : ${it[0]}\tStatus: ${it[1]}\tSample: ${it[2]}\n\
+  File  : [${it[3].fileName}]"
+}
+
+if (params.verbose) mergedBam = mergedBam.view {
+  "Merged BAM:\n\
+  ID    : ${it[0]}\tStatus: ${it[1]}\tSample: ${it[2]}\n\
+  File  : [${it[3].fileName}]"
+}
+
+mergedBam = mergedBam.mix(singleBam)
+
+if (params.verbose) mergedBam = mergedBam.view {
+  "BAM for MarkDuplicates:\n\
+  ID    : ${it[0]}\tStatus: ${it[1]}\tSample: ${it[2]}\n\
+  File  : [${it[3].fileName}]"
 }
 
 if (params.verbose) mappedBam = mappedBam.view {
@@ -117,13 +161,88 @@ if (params.verbose) mappedBam = mappedBam.view {
   File  : [${it[4].fileName}]"
 }
 
+process MarkDuplicates {
+  tag {idPatient + "-" + idSample}
+
+  publishDir params.outDir, mode: 'link',
+    saveAs: {
+      if (it == "${idSample}.dedup_metrics.txt") "Reports/MarkDuplicates/${it}"
+      else "Align/${it}"
+    }
+
+  input:
+    set idPatient, status, idSample, file("${idSample}.bam") from mergedBam
+
+  output:
+    set idPatient, idSample, file("${idSample}.dedup.bam"), file("${idSample}.dedup.bai") into duplicateMarkedBams
+    set idPatient, status, idSample, val("${idSample}.dedup.bam"), val("${idSample}.dedup.bam.bai") into samplesTsv
+    file ("${idSample}.dedup_metrics.txt") into markDuplicatesReport
+
+  when: !params.onlyQC
+
+  script:
+  """ \
+  gatk --java-options "-Xms500m -Xmx${task.memory.toGiga()}g" \
+  MarkDuplicates \
+  --MAX_RECORDS_IN_RAM 50000 \
+  --INPUT ${idSample}.bam \
+  --METRICS_FILE ${idSample}.dedup_metrics.txt \
+  --TMP_DIR . \
+  --ASSUME_SORT_ORDER coordinate \
+  --CREATE_INDEX true \
+  --OUTPUT ${idSample}.dedup.bam \
+  """
+}
+
+// Creating a TSV file to restart from this step
+samplesTsv.map { idPatient, status, idSample, bam, bai ->
+  "${idPatient}\t${status}\t${idSample}\t${params.outDir}/Align/${bam}\t${params.outDir}/Align/${bai}\n"
+}.collectFile(
+  name: 'samples.tsv', sort: true, storeDir: "${params.outDir}"
+)
+
+(bamForQualimap, bamForSamToolsStats) = duplicateMarkedBams.into(2)
+
+process RunQualimap {
+  tag {idPatient + "-" + idSample}
+
+  publishDir "${params.outDir}/Reports/Qualimap", mode: params.publishDirMode
+
+  input:
+  set idPatient, idSample, file(bam), file(bai) from bamForQualimap
+
+  output:
+  file("${bam.baseName}") into qualimapReport
+
+  when: !params.noQualimap
+
+  script:
+  """
+  qualimap --java-mem-size=${task.memory.toGiga()}G \
+  bamqc \
+  -bam ${bam} \
+  --paint-chromosome-limits \
+  --genome-gc-distr HUMAN \
+  -nt ${task.cpus} \
+  -skip-duplicated \
+  --skip-dup-mode 0 \
+  -outdir ${bam.baseName} \
+  -outformat HTML
+  """
+}
+
+if (params.verbose) qualimapReport = qualimapReport.view {
+  "Qualimap BamQC report:\n\
+  Dir   : [${it.fileName}]"
+}
+
 process RunSamtoolsStats {
   tag {idPatient + "-" + idSample}
 
-  publishDir "${params.outDir}/QC/SamToolsStats", mode: params.publishDirMode
+  publishDir "${params.outDir}/Reports/SamToolsStats", mode: params.publishDirMode
 
   input:
-    set idPatient, status, idSample, idRun, file(bam), file(bai) from mappedBamForQC
+    set idPatient, idSample, file(bam), file(bai) from bamForSamToolsStats
 
   output:
     file ("${bam}.stats.txt") into samtoolsStatsReport
@@ -167,7 +286,13 @@ def extractSample(tsvFile) {
       Utils.checkNumberOfItem(row, 5)
       if (!Utils.hasExtension(file1, "bam")) exit 1, "File: ${file1} has the wrong extension. See --help for more information"
     }
-    else "No recognisable extention for input file: ${file1}"
+    else if (file1.isDirectory()) {
+      row = extractFastqFromDir(file1)
+      file1 = row[4]
+      file2 = row.size() > 5 ? row[5] : file("null")
+    } else {
+      "No recognisable extention for input file: ${file1}"
+    }
 
     [idPatient, status, idSample, idRun, file1, file2]
   }
@@ -186,15 +311,14 @@ def extractFastqFromDir(pattern) {
     .fromPath(pattern, type: 'dir')
     .ifEmpty { error "No directories found matching pattern '${pattern}'" }
     .subscribe onNext: { sampleDir ->
-      // the last name of the sampleDir is assumed to be a unique sample id
-      sampleId = sampleDir.getFileName().toString()
-
-      for (path1 in file("${sampleDir}/**_R1_*.{fastq,fq}.gz")) {
+      for (path1 in file("${sampleDir}/**_R1_*.fastq.gz")) {
         assert path1.getName().contains('_R1_')
         path2 = file(path1.toString().replace('_R1_', '_R2_'))
         if (!path2.exists()) error "Path '${path2}' not found"
-        (flowcell, lane) = flowcellLaneFromFastq(path1)
+        // the last name of the sampleDir is assumed to be a unique sample id
+        sampleId = path1.getParent().getName().toString()
         patient = sampleId
+        (flowcell, lane) = flowcellLaneFromFastq(path1)
         status = 0  // normal (not tumor)
         rgId = "${flowcell}.${sampleId}.${lane}"
         result = [patient, status, sampleId, rgId, path1, path2]
@@ -263,27 +387,28 @@ def helpMessage() {
 
 def minimalInformationMessage() {
   // Minimal information message
-  log.info "Command Line: " + workflow.commandLine
+  log.info "Command line: " + workflow.commandLine
   log.info "Profile     : " + workflow.profile
-  log.info "Project Dir : " + workflow.projectDir
-  log.info "Launch Dir  : " + workflow.launchDir
-  log.info "Work Dir    : " + workflow.workDir
+  log.info "Project dir : " + workflow.projectDir
+  log.info "Launch dir  : " + workflow.launchDir
+  log.info "Work dir    : " + workflow.workDir
   log.info "Cont Engine : " + workflow.containerEngine
-  log.info "Out Dir     : " + params.outDir
-  log.info "TSV file    : ${tsvFile}"
+  log.info "Executor    : " + config.process.executor
+  log.info "Out dir     : " + params.outDir
+  log.info "Input path  : " + inputPath
   log.info "Genome      : " + params.genome
-  log.info "Genome_base : " + params.genome_base
+  log.info "Genomes dir : " + params.genome_base
   log.info "Containers"
-  if (params.repository != "") log.info "  Repository   : " + params.repository
-  if (params.containerPath != "") log.info "  ContainerPath: " + params.containerPath
-  log.info "  Tag          : " + params.tag
+  if (params.containsKey("repository"))
+    log.info "  Repository   : " + params.repository
+  if (params.containsKey("containerPath"))
+    log.info "  ContainerPath: " + params.containerPath
+  if (params.containsKey("tag"))
+    log.info "  Tag          : " + params.tag
   log.info "Reference files used:"
-  log.info "  genome      :\n\t" + referenceMap.genomeFasta
-  log.info "\t" + referenceMap.genomeDict
-  log.info "\t" + referenceMap.genomeIndex
-  log.info "  bwa indexes :\n\t" + referenceMap.bwaIndex.join(',\n\t')
+  log.info "  fasta       :\n\t" + genomeFasta
+  log.info "  bwa indexes :\n\t" + bwaIndex.join(',\n\t')
 }
-
 
 workflow.onComplete {
   // Display complete message
