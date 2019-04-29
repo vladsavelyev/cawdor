@@ -55,7 +55,7 @@ if (params.verbose) inputFiles = inputFiles.view {
   Files : [${it[4].fileName}, ${it[5].fileName}]"
 }
 
-process FastQC {
+process RunFastQC {
   tag {idPatient + "-" + idLane}
 
   publishDir "${params.outDir}/Reports/FastQC/${idLane}", mode: params.publishDirMode
@@ -204,7 +204,7 @@ process MarkDuplicates {
 samplesTsv.map { idPatient, status, idSample, bam, bai ->
   "${idPatient}\t${status}\t${idSample}\t${params.outDir}/Align/${bam}\t${params.outDir}/Align/${bai}\n"
 }.collectFile(
-  name: 'Align/samples.tsv', sort: true, storeDir: "${params.outDir}"
+  name: 'samples.tsv', sort: true, storeDir: "${params.outDir}/Align"
 )
 
 (bamForQualimap, bamForSamToolsStats) = duplicateMarkedBams.into(2)

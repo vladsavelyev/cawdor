@@ -116,57 +116,55 @@ class Utils {
     // Channeling the TSV file containing FASTQ or BAM
     // Format is: "subject status sample lane fastq1 fastq2"
     // or: "subject status sample lane bam"
-    def samplesFromTSV = Channel.create()
+    def samplesFromTSV = Channel.empty()
 
-    Channel
-      .from(tsvFile)
-      .splitCsv(sep: '\t')
-      .subscribe onNext: { row ->
-        if (row.size == 0) return
-        if (row[0] ==~ /^#.*/) return
+    tsvFile.eachLine { line ->
+      if (line ==~ /^#.*/) return
+      def row = line.split(/\t/)
+      println("TSV row: ${row}")
+      String idPatient = row[0]
+      int status       = Utils.returnStatus(row[1])
+      String idSample  = row[2]
+      String idLane    = row[3]
+      def file1        = Utils.returnFile(row[4])
+      def file2        = file("null")
 
-        println("TSV row: ${row}")
-        String idPatient = row[0]
-        int status       = Utils.returnStatus(row[1])
-        String idSample  = row[2]
-        String idLane    = row[3]
-        def file1        = Utils.returnFile(row[4])
-        def file2        = file("null")
-
-        if (Utils.isFq(file1)) {
-          if (row.size > 5) {
-            file2 = Utils.returnFile(row[5])
-            if (!Utils.isFq(file2)) exit 1, "R2 FastQ file ${file2} has the wrong extension. " +
-                    "See --help for more information"
-          }
-          else {
-            if (!file1.getName().contains('_R1')) exit 1, "Can't find R2 match for ${file1} as the file name " +
-                    "doesn't contain _R1. Workaround is to specify both R1 and R2 FastQ files in the TSV. " +
-                    "See --help for more information"
-            file2 = file(file1.toString().replace('_R1', '_R2'))
-            if (!file2.exists()) error "Not found R2 FastQ file '${file2}'"
-          }
-          samplesFromTSV.bind([idPatient, status, idSample, idLane, file1, file2])
+      if (Utils.isFq(file1)) {
+        if (row.size > 5) {
+          file2 = Utils.returnFile(row[5])
+          if (!Utils.isFq(file2)) exit 1, "R2 FastQ file ${file2} has the wrong extension. " +
+              "See --help for more information"
         }
-        else if (file1.toString().toLowerCase().endsWith(".bam")) {
-          Utils.checkNumberOfItem(row, 5)
-          if (!Utils.hasExtension(file1, "bam")) exit 1, "File: ${file1} has the wrong extension. " +
-                  "See --help for more information"
-          samplesFromTSV.bind([idPatient, status, idSample, idLane, file1, file2])
+        else {
+          if (!file1.getName().contains('_R1')) exit 1, "Can't find R2 match for ${file1} as the file name " +
+              "doesn't contain _R1. Workaround is to specify both R1 and R2 FastQ files in the TSV. " +
+              "See --help for more information"
+          file2 = file(file1.toString().replace('_R1', '_R2'))
+          if (!file2.exists()) error "Not found R2 FastQ file '${file2}'"
         }
-        else if (file1.isDirectory()) {
-          def rows = Utils.extractFastqFromDir(file1)
-          rows.subscribe { r ->
-            file1 = Utils.returnFile(r[4])
-            file2 = r.size() > 5 ? Utils.returnFile(r[5]) : file("null")
-            samplesFromTSV.bind([idPatient, status, idSample, r[3], file1, file2])
-          }
-        } else {
-          "No recognisable extention for input file: ${file1}"
+        samplesFromTSV << [idPatient, status, idSample, idLane, file1, file2]
+      }
+      else if (file1.toString().toLowerCase().endsWith(".bam")) {
+        Utils.checkNumberOfItem(row, 5)
+        if (!Utils.hasExtension(file1, "bam")) exit 1, "File: ${file1} has the wrong extension. " +
+            "See --help for more information"
+        samplesFromTSV << [idPatient, status, idSample, idLane, file1, file2]
+      }
+      else if (file1.isDirectory()) {
+        println("Path ${file1} is a directory, searching it for FastQ files")
+        def fastqsFromDir = Utils.extractFastqFromDir(file1)
+        fastqsFromDir = fastqsFromDir
+          .map { r ->
+            def f1 = Utils.returnFile(r[4])
+            def f2 = r.size() > 5 ? Utils.returnFile(r[5]) : file("null")
+            [idPatient, status, idSample, r[3], f1, f2]
         }
-      }, onComplete: { samplesFromTSV.close() }
-
-    samplesFromTSV
+        samplesFromTSV = samplesFromTSV.mix(fastqsFromDir)
+      } else {
+        "No recognisable extention for input file: ${file1}"
+      }
+    }
+//    samplesFromTSV.close()
   }
 
   static def extractFastqFromDir(pattern) {
