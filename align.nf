@@ -13,22 +13,24 @@ if (![genomeFasta, genomeIndex, genomeDict, bwaIndex].every())
   exit 1, "Missing reference files for alignment in ${params.genomes_base} for genome ${params.genome}. " +
           "See --help for more information"
 
-def inputFiles = Channel.empty()
+def inputChannel = Channel.empty()
 def inputPath = file("null")
 if (params.containsKey("samples")) {
   inputPath = file(params.samples)
-  inputFiles = Utils.extractSamplesFromTSV(inputPath)
-  (inputFiles, fastqTmp) = inputFiles.into(2)
-  fastqTmp.toList().subscribe onNext: {
+  List inputFiles = Utils.extractSamplesFromTSV(inputPath)
+  inputChannel = Channel.from(inputFiles)
+  (inputChannel, tmp) = inputChannel.into(2)
+  tmp.toList().subscribe onNext: {
     if (it.size() == 0) {
       exit 1, "No FASTQ files found in TSV file '${params.samples}'"
     }
   }
 } else if (params.containsKey("samplesDir")) {
   inputPath = params.samplesDir  // used in the reports
-  inputFiles = Utils.extractFastqFromDir(params.samplesDir)
-  (inputFiles, fastqTmp) = inputFiles.into(2)
-  fastqTmp.toList().subscribe onNext: {
+  List inputFiles = Utils.extractFastqFromDir(params.samplesDir)
+  inputChannel = Channel.from(inputFiles)
+  (inputChannel, tmp) = inputChannel.into(2)
+  tmp.toList().subscribe onNext: {
     if (it.size() == 0) {
       exit 1, "No FASTQ files found in --samplesDir directory '${params.samplesDir}'"
     }
@@ -47,9 +49,9 @@ minimalInformationMessage()
 */
 
 // fork inputFiles channel into 2 copies
-(inputFiles, inputFilesforFastQC) = inputFiles.into(2)
+(inputChannel, inputFilesforFastQC) = inputChannel.into(2)
 
-if (params.verbose) inputFiles = inputFiles.view {
+if (params.verbose) inputChannel = inputChannel.view {
   "Input files:\n\
   ID    : ${it[0]}\tStatus: ${it[1]}\tSample: ${it[2]}\tRun   : ${it[3]}\n\
   Files : [${it[4].fileName}, ${it[5].fileName}]"
@@ -82,7 +84,7 @@ process MapReads {
   tag {idPatient + "-" + idLane}
 
   input:
-    set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputFiles
+    set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputChannel
     set file(genomeFasta), file(bwaIndex) from Channel.value([genomeFasta, bwaIndex])
 
   output:
@@ -98,9 +100,10 @@ process MapReads {
   readGroup = "@RG\\tID:${idLane}\\t${CN}PU:${idLane}\\tSM:${idSample}\\tLB:${idSample}\\tPL:illumina"
   // adjust mismatch penalty for tumor samples
   extra = status == 1 ? "-B 3" : ""
-
-  bwaMemCmd = "bwa mem -K 100000000 -p -R \"${readGroup}\" ${extra} -t ${task.cpus} -M ${genomeFasta}"
-  sortCmd = "samtools sort -@ ${task.cpus} -m 2G -"
+//  bwa mem -K 100000000 -p -R "@RG\tID:D0EN0ACXX111207.normal.4\tPU:D0EN0ACXX111207.normal.4\tSM:normal\tLB:normal\tPL:illumina"  -t 28 -M human_g1k_v37_decoy.small.fasta tiny_n_L004_R1_xxx.fastq.gz tiny_n_L004_R2_xxx.fastq.gz
+  bwaMemCmd = "bwa mem -K 100000000 -R \"${readGroup}\" ${extra} -t ${task.cpus} -M ${genomeFasta}"
+  sortMem = Math.min(2, task.memory.toGiga())
+  sortCmd = "samtools sort -@ ${task.cpus} -m ${sortMem}G -"
 
   if (Utils.isFq(inputFile1)) {
     """ \
@@ -112,7 +115,7 @@ process MapReads {
     """ \
     samtools sort -n -o -l 1 -@ ${task.cpus} -m ${task.memory.toGiga()}G ${inputFile1} \
     | bedtools bamtofastq -i /dev/stdin -fq /dev/stdout -fq2 /dev/stdout \
-    | ${bwaMemCmd} \
+    | ${bwaMemCmd} -p \
     | ${sortCmd} \
     > ${idLane}.bam \
     """

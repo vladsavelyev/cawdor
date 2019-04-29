@@ -112,30 +112,34 @@ class Utils {
       }
   }
 
-  static def extractSamplesFromTSV(tsvFile) {
+  static List extractSamplesFromTSV(tsvFile) {
     // Channeling the TSV file containing FASTQ or BAM
     // Format is: "subject status sample lane fastq1 fastq2"
     // or: "subject status sample lane bam"
-    def samplesFromTSV = Channel.empty()
+    List samplesFromTSV = []
 
     tsvFile.eachLine { line ->
       if (line ==~ /^#.*/) return
-      def row = line.split(/\t/)
+      List row = line.split(/\t/)
+      if (row.size() == 0) return
       println("TSV row: ${row}")
+
       String idPatient = row[0]
       int status       = Utils.returnStatus(row[1])
       String idSample  = row[2]
-      String idLane    = row[3]
+      String idLane    = "${idSample}.${row[3]}"
       def file1        = Utils.returnFile(row[4])
       def file2        = file("null")
 
       if (Utils.isFq(file1)) {
-        if (row.size > 5) {
+        if (row.size() > 5) {
+          println("Paths are FastQ files: ${file1} and ${file2}")
           file2 = Utils.returnFile(row[5])
           if (!Utils.isFq(file2)) exit 1, "R2 FastQ file ${file2} has the wrong extension. " +
               "See --help for more information"
         }
         else {
+          println("Path ${file1} is a R1 fastq file. Found adjacent R2 file: ${file2}.")
           if (!file1.getName().contains('_R1')) exit 1, "Can't find R2 match for ${file1} as the file name " +
               "doesn't contain _R1. Workaround is to specify both R1 and R2 FastQ files in the TSV. " +
               "See --help for more information"
@@ -145,66 +149,49 @@ class Utils {
         samplesFromTSV << [idPatient, status, idSample, idLane, file1, file2]
       }
       else if (file1.toString().toLowerCase().endsWith(".bam")) {
+        println("Path ${file1} is a BAM file")
         Utils.checkNumberOfItem(row, 5)
-        if (!Utils.hasExtension(file1, "bam")) exit 1, "File: ${file1} has the wrong extension. " +
-            "See --help for more information"
         samplesFromTSV << [idPatient, status, idSample, idLane, file1, file2]
       }
       else if (file1.isDirectory()) {
         println("Path ${file1} is a directory, searching it for FastQ files")
-        def fastqsFromDir = Utils.extractFastqFromDir(file1)
-        fastqsFromDir = fastqsFromDir
-          .map { r ->
-            def f1 = Utils.returnFile(r[4])
-            def f2 = r.size() > 5 ? Utils.returnFile(r[5]) : file("null")
-            [idPatient, status, idSample, r[3], f1, f2]
+        List fastqsFromDir = Utils.extractFastqFromDir(file1)
+        fastqsFromDir.each { r ->
+          def f1 = Utils.returnFile(r[4])
+          def f2 = r.size() > 5 ? Utils.returnFile(r[5]) : file("null")
+          samplesFromTSV << [idPatient, status, idSample, r[3], f1, f2]
         }
-        samplesFromTSV = samplesFromTSV.mix(fastqsFromDir)
       } else {
         "No recognisable extention for input file: ${file1}"
       }
     }
-//    samplesFromTSV.close()
+
+    samplesFromTSV
   }
 
-  static def extractFastqFromDir(pattern) {
+  static List extractFastqFromDir(pattern) {
     // create a channel of FASTQs from a directory pattern such as
     // "my_samples/*/". All samples are considered 'normal'.
     // All FASTQ files in subdirectories are collected and emitted;
     // they must have _R1 and _R2 in their names.
 
-    def fastqFromDir = Channel.create()
-
-    // a temporary channel does all the work
-    Channel
-      .fromPath(pattern, type: 'dir')
-      .ifEmpty { error "No directories found matching pattern '${pattern}'" }
-      .subscribe onNext: { sampleDir ->
-        for (path1 in file("${sampleDir}/**_R1*.fastq.gz")) {
-          assert path1.getName().contains('_R1')
-          def path2 = file(path1.toString().replace('_R1', '_R2'))
-          if (!path2.exists()) error "Path '${path2}' not found"
-          // the last name of the sampleDir is assumed to be a unique sample id
-          String sampleId = path1.getParent().getName().toString()
-          String patient = sampleId
-          def (String flowcell, int lane) = Utils.flowcellLaneFromFastq(path1)
-          int status = 0  // normal (not tumor)
-          GString rgId = "${flowcell}.${sampleId}.${lane}"
-          List row = [patient, status, sampleId, rgId, path1, path2]
-          fastqFromDir.bind(row)
-        }
-      }, onComplete: { fastqFromDir.close() }
-
-//    def tmp
-//    (fastqFromDir, tmp) = fastqFromDir.into(2)
-//    tmp.toList().subscribe onNext: {
-//      if (it.size() == 0) {
-//        exit 1, "No FASTQ files found in ${pattern}"
-//      } else {
-//        println "Found FASTQ in dir ${pattern}: ${it}"
-//      }
-//    }, onComplete: { tmp.close() }
-    fastqFromDir
+    List res = []
+    List dirs = [file(pattern, type: "dir")].flatten()
+    dirs.each {
+      for (path1 in file("${it}/**_R1*.fastq.gz")) {
+        assert path1.getName().contains('_R1')
+        def path2 = file(path1.toString().replace('_R1', '_R2'))
+        if (!path2.exists()) error "Path '${path2}' not found"
+        // the last name of the sampleDir is assumed to be a unique sample id
+        String sampleId = path1.getParent().getName().toString()
+        String patient = sampleId
+        def (String flowcell, int lane) = Utils.flowcellLaneFromFastq(path1)
+        int status = 0  // normal (not tumor)
+        GString rgId = "${flowcell}.${sampleId}.${lane}"
+        res << [patient, status, sampleId, rgId, path1, path2]
+      }
+    }
+    res
   }
 
   static def flowcellLaneFromFastq(path) {
