@@ -5,6 +5,8 @@ if (params.help) exit 0, helpMessage()
 genomeFasta = Utils.findRefFile(params, 'genomeFasta')
 genomeIndex = Utils.findRefFile(params, 'genomeIndex')
 genomeDict  = Utils.findRefFile(params, 'genomeDict')
+purpleHet   = Utils.findRefFile(params, 'purpleHet')
+purpleGC    = Utils.findRefFile(params, 'purpleGC')
 dbsnp       = Utils.findRefFile(params, 'dbsnp')
 intervals   = Utils.findRefFile(params, 'intervals')
 if (![genomeFasta, genomeIndex, genomeDict, dbsnp, intervals].every())
@@ -64,7 +66,7 @@ process CreateIntervalBeds {
     file(intervals) from Channel.value(intervals)
 
   output:
-    file '*.bed' into bedIntervals mode flatten
+    file '*.bed' into intervalBeds mode flatten
 
   script:
   // If the interval file is BED format, the fifth column is interpreted to
@@ -98,10 +100,12 @@ process CreateIntervalBeds {
     """
 }
 
-bedIntervals = bedIntervals
-  .map { intervalFile ->
+intervalBeds = intervalBeds.ifEmpty{ exit 1, "No intervals" }
+
+intervalBeds = intervalBeds
+  .map { intervalBed ->
     def duration = 0.0
-    for (line in intervalFile.readLines()) {
+    for (line in intervalBed.readLines()) {
       final fields = line.split('\t')
       if (fields.size() >= 5) duration += fields[4].toFloat()
       else {
@@ -110,36 +114,39 @@ bedIntervals = bedIntervals
         duration += (end - start) / params.nucleotidesPerSecond
       }
     }
-    [duration, intervalFile]
+    [duration, intervalBed]
   }.toSortedList({ a, b -> b[0] <=> a[0] })
   .flatten().collate(2)
   .map{duration, intervalFile -> intervalFile}
 
-if (params.verbose) bedIntervals = bedIntervals.view {
+if (params.verbose) intervalBeds = intervalBeds.view {
   "  Interv: ${it.baseName}"
 }
 
 bamsAll = bamsNormal.join(bamsTumour)
+if (params.verbose) bamsAll = bamsAll.view {
+  "All BAM pairs: ${it}"
+}
 
 // Manta, Strelka (no splitting by intervals)
-(bamsForManta, bamsForStrelka, bamsForStrelkaBP, bamsForPurple, bamsAll) = bamsAll.into(5)
+(bamsForManta, bamsForStrelkaBP, bamsForCobalt, bamsForAmber, bamsForIntervals) = bamsAll.into(5)
 
 // MuTect, VarDict (partitioning by intervals)
-bamsTumourNormalIntervals = bamsAll.combine(bedIntervals)  // cartesian product of 2 channels
-(bamsForMutect, bamsForVardict) = bamsTumourNormalIntervals.into(2)
+bamsByIntervals = bamsForIntervals.combine(intervalBeds)  // cartesian product of 2 channels
+(bamsForMutect, bamsForVardict) = bamsByIntervals.into(2)
 
 // This will give as a list of unfiltered calls for MuTect.
 process RunMutect {
   tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
 
   input:
-    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
-                   idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForMutect
-    set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([genomeFasta, genomeIndex, genomeDict])
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
+                 idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForMutect
+  set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([genomeFasta, genomeIndex, genomeDict])
 
   output:
-    set val("MuTect"), idPatient, idSampleNormal, idSampleTumour,
-            file("${idPatient}-${intervalBed.baseName}.vcf") into mutectOutput
+  set val("MuTect"), idPatient, idSampleNormal, idSampleTumour,
+      file("${idPatient}-${intervalBed.baseName}.vcf") into mutectOutput
 
   when: !params.onlyQC
 
@@ -196,13 +203,13 @@ process RunVarDict {
   tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
 
   input:
-    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
-                   idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForVardict
-    file(genomeFasta) from Channel.value(genomeFasta)
-    file(genomeIndex) from Channel.value(genomeIndex)
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
+                 idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForVardict
+  file(genomeFasta) from Channel.value(genomeFasta)
+  file(genomeIndex) from Channel.value(genomeIndex)
 
   output:
-    set val("VarDict"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf") into vardictOutput
+  set val("VarDict"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf") into vardictOutput
 
   when: !params.onlyQC
 
@@ -274,19 +281,19 @@ process ConcatVCFbyInterval {
   publishDir "${params.outDir}/VariantCalling/${idPatient}/${"$variantCaller"}", mode: params.publishDirMode
 
   input:
-    set variantCaller, idPatient, idSampleNormal, idSampleTumour, file(vcFiles) from vcfsToConcat
-    file(genomeIndex) from Channel.value(genomeIndex)
-    file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
+  set variantCaller, idPatient, idSampleNormal, idSampleTumour, file(vcFiles) from vcfsToConcat
+  file(genomeIndex) from Channel.value(genomeIndex)
+  file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
 
   output:
-    set variantCaller, idPatient, idSampleNormal, idSampleTumour,
-            file("${idPatient}-${variantCaller}.vcf.gz"),
-            file("${idPatient}-${variantCaller}.vcf.gz.tbi") into vcfConcatenated
+  set variantCaller, idPatient, idSampleNormal, idSampleTumour,
+          file("${idPatient}-${variantCaller}.vcf.gz"),
+          file("${idPatient}-${variantCaller}.vcf.gz.tbi") into vcfConcatenated
 
   when: !params.onlyQC
 
   script:
-  outputFile = "${idPatient}-${variantCaller}.vcf"
+  outputFile = "${idPatient}-${variantCaller}.vcf"  // will add .gz and .gz.tbi automatically
   options = params.targetBED ? "-t ${targetBED}" : ""
   """
   concatenateVCFs.sh -i ${genomeIndex} -c ${task.cpus} -o ${outputFile} ${options}
@@ -299,117 +306,59 @@ if (params.verbose) vcfConcatenated = vcfConcatenated.view {
   File  : ${it[4].fileName}"
 }
 
-//process RunStrelka {
-//  tag {idSampleTumour + "_vs_" + idSampleNormal}
-//
-//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Strelka", mode: params.publishDirMode
-//
-//  input:
-//    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) \
-//      from bamsForStrelka
-//    file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-//    set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
-//      genomeFasta,
-//      genomeIndex,
-//      genomeDict
-//    ])
-//
-//  output:
-//    set val("Strelka"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaOutput
-//
-//  when: !params.onlyQC
-//
-//  script:
-//  beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
-//  options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
-//  """
-//  ${beforeScript}
-//  configureStrelkaSomaticWorkflow.py \
-//  --Tumour ${bamTumour} \
-//  --normal ${bamNormal} \
-//  --referenceFasta ${genomeFasta} \
-//  ${options} \
-//  --runDir Strelka
-//
-//  python Strelka/runWorkflow.py -m local -j ${task.cpus}
-//  mv Strelka/results/variants/somatic.indels.vcf.gz Strelka_${idSampleTumour}_vs_${idSampleNormal}_somatic_indels.vcf.gz
-//  mv Strelka/results/variants/somatic.indels.vcf.gz.tbi Strelka_${idSampleTumour}_vs_${idSampleNormal}_somatic_indels.vcf.gz.tbi
-//  mv Strelka/results/variants/somatic.snvs.vcf.gz Strelka_${idSampleTumour}_vs_${idSampleNormal}_somatic_snvs.vcf.gz
-//  mv Strelka/results/variants/somatic.snvs.vcf.gz.tbi Strelka_${idSampleTumour}_vs_${idSampleNormal}_somatic_snvs.vcf.gz.tbi
-//  """
-//}
-//
-//if (params.verbose) strelkaOutput = strelkaOutput.view {
-//  "Variant Calling output:\n\
-//  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
-//  Files : ${it[4].fileName}\n\
-//  Index : ${it[5].fileName}"
-//}
-//
-//process RunManta {
-//  tag {idSampleTumour + "_vs_" + idSampleNormal}
-//
-//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Manta", mode: params.publishDirMode
-//
-//  input:
-//    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) \
-//      from bamsForManta
-//    file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-//    set file(genomeFasta), file(genomeIndex) from Channel.value([
-//      genomeFasta,
-//      genomeIndex
-//    ])
-//
-//  output:
-//    set val("Manta"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into mantaOutput
-//    set idPatient, idSampleNormal, idSampleTumour, file("*.candidateSmallIndels.vcf.gz"), file("*.candidateSmallIndels.vcf.gz.tbi")
-//        into mantaToStrelka
-//
-//  when: !params.strelkaBP && !params.onlyQC
-//
-//  script:
-//  beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
-//  options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
-//  """
-//  ${beforeScript}
-//  configManta.py \
-//  --normalBam ${bamNormal} \
-//  --tumorBam ${bamTumour} \
-//  --reference ${genomeFasta} \
-//  ${options} \
-//  --runDir Manta
-//
-//  python Manta/runWorkflow.py -m local -j ${task.cpus}
-//
-//  mv Manta/results/variants/candidateSmallIndels.vcf.gz \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.candidateSmallIndels.vcf.gz
-//  mv Manta/results/variants/candidateSmallIndels.vcf.gz.tbi \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.candidateSmallIndels.vcf.gz.tbi
-//  mv Manta/results/variants/candidateSV.vcf.gz \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.candidateSV.vcf.gz
-//  mv Manta/results/variants/candidateSV.vcf.gz.tbi \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.candidateSV.vcf.gz.tbi
-//  mv Manta/results/variants/diploidSV.vcf.gz \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.diploidSV.vcf.gz
-//  mv Manta/results/variants/diploidSV.vcf.gz.tbi \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.diploidSV.vcf.gz.tbi
-//  mv Manta/results/variants/somaticSV.vcf.gz \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.somaticSV.vcf.gz
-//  mv Manta/results/variants/somaticSV.vcf.gz.tbi \
-//    Manta_${idSampleTumour}_vs_${idSampleNormal}.somaticSV.vcf.gz.tbi
-//  """
-//}
-//
+
+process RunManta {
+  tag {idSampleTumour + "_vs_" + idSampleNormal}
+
+  beforeScript 'export PATH=$NXF_CONDA_CACHEDIR/py2/bin:$PATH'
+
+  publishDir "${params.outDir}/VariantCalling/${idPatient}/Manta", mode: params.publishDirMode
+
+  input:
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForManta
+  file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
+  set file(genomeFasta), file(genomeIndex) from Channel.value([
+    genomeFasta,
+    genomeIndex
+  ])
+
+  output:
+//  set val("Manta"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into mantaOutput
+//  set idPatient, idSampleNormal, idSampleTumour,
+//      file("Manta/results/variants/candidateSmallIndels.vcf.gz"),
+//      file("Manta/results/variants/candidateSmallIndels.vcf.gz.tbi"),
+//      into mantaToStrelka
+
+  when: !params.onlyQC
+
+  script:
+  targetCmd = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
+  options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
+  outputFile = "${idPatient}-manta.vcf.gz"
+  """
+  ${targetCmd}
+  configManta.py \
+  --normalBam ${bamNormal} \
+  --tumorBam ${bamTumour} \
+  --reference ${genomeFasta} \
+  ${options} \
+  --runDir Manta
+
+  python Manta/runWorkflow.py -m local -j ${task.cpus}
+
+  mv Manta/results/variants/somaticSV.vcf.gz ${outputFile}
+  mv Manta/results/variants/somaticSV.vcf.gz.tbi ${outputFile}.tbi
+  """
+}
+
 //if (params.verbose) mantaOutput = mantaOutput.view {
-//  "Variant Calling output:\n\
+//  "Manta output:\n\
 //  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
-//  Files : ${it[4].fileName}\n\
-//  Index : ${it[5].fileName}"
+//  Files : ${it[4].fileName}"
 //}
-//
+
 //// Running Strelka Best Practice with Manta indel candidates
 //// For easier joining, remaping channels to idPatient, idSampleNormal, idSampleTumour...
-//
 //bamsForStrelkaBP = bamsForStrelkaBP.map {
 //   idPatientNormal, idSampleNormal, bamNormal, baiNormal, idSampleTumour, bamTumour, baiTumour ->
 //  [idPatientNormal, idSampleNormal, idSampleTumour, bamNormal, baiNormal, bamTumour, baiTumour]
@@ -424,23 +373,24 @@ if (params.verbose) vcfConcatenated = vcfConcatenated.view {
 //  publishDir "${params.outDir}/VariantCalling/${idPatient}/Strelka", mode: params.publishDirMode
 //
 //  input:
-//    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour),
-//        file(mantaCSI), file(mantaCSIi) from bamsForStrelkaBP
-//    file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-//    set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
-//      genomeFasta,
-//      genomeIndex,
-//      genomeDict
-//    ])
+//  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour),
+//      file(mantaCSI), file(mantaCSIi) from bamsForStrelkaBP
+//  file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
+//  set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
+//    genomeFasta,
+//    genomeIndex,
+//    genomeDict
+//  ])
 //
 //  output:
-//    set val("Strelka"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaBPOutput
+//  set val("Strelka"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaBPOutput
 //
-//  when: params.strelkaBP && !params.onlyQC
+//  when: !params.onlyQC
 //
 //  script:
 //  beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
 //  options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
+//  outputFile = "${idPatient}-strelka.vcf.gz"
 //  """ \
 //  ${beforeScript}
 //  configureStrelkaSomaticWorkflow.py \
@@ -453,86 +403,135 @@ if (params.verbose) vcfConcatenated = vcfConcatenated.view {
 //
 //  python Strelka/runWorkflow.py -m local -j ${task.cpus}
 //
-//  mv Strelka/results/variants/somatic.indels.vcf.gz \
-//    StrelkaBP_${idSampleTumour}_vs_${idSampleNormal}_somatic_indels.vcf.gz
-//  mv Strelka/results/variants/somatic.indels.vcf.gz.tbi \
-//    StrelkaBP_${idSampleTumour}_vs_${idSampleNormal}_somatic_indels.vcf.gz.tbi
-//  mv Strelka/results/variants/somatic.snvs.vcf.gz \
-//    StrelkaBP_${idSampleTumour}_vs_${idSampleNormal}_somatic_snvs.vcf.gz
-//  mv Strelka/results/variants/somatic.snvs.vcf.gz.tbi \
-//    StrelkaBP_${idSampleTumour}_vs_${idSampleNormal}_somatic_snvs.vcf.gz.tbi
+//  bcftools concat -a Strelka/results/variants/somatic.indels.vcf.gz Strelka/results/variants/somatic.snvs.vcf.gz \
+//  -Oz -o ${outputFile}
+//  tabix -p vcf ${outputFile}
 //  """
 //}
 //
 //if (params.verbose) strelkaBPOutput = strelkaBPOutput.view {
 //  "Variant Calling output:\n\
 //  Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
-//  Files : ${it[4].fileName}\n\
-//  Index : ${it[5].fileName}"
+//  File  : ${it[4].fileName}"
 //}
-
-//// TODO: wrap PURPLE into a single tool. Or better not? Easier to rerun parts
+//
 //process RunAmber {
+//  label "purple"
+//
 //  tag {idSampleTumour + "_vs_" + idSampleNormal}
 //
+//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/amber", mode: params.publishDirMode
+//
 //  input:
-//    set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour)
-//      from bamsForPurple
-//    set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleHet) from Channel.value([
-//      genomeFasta,
-//      genomeIndex,
-//      genomeDict,
-//      purpleHet
-//    ])
+//  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForAmber
+//  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleHet) from Channel.value([
+//    genomeFasta,
+//    genomeIndex,
+//    genomeDict,
+//    purpleHet
+//  ])
 //
 //  output:
-//     set idPatient, status, idSample, '{batch}.amber.baf', '{batch}.amber.baf.pcf' into amberOutput
+//  set idPatient, idSampleNormal, idSampleTumour, "amber/${idPatient}.amber.baf", "amber/${idPatient}.amber.baf.pcf" into amberOutput
 //
 //  when: !params.onlyQC
 //
 //  script:
-//  """
-//  AMBER
-//  -tumor {wildcards.batch}
-//  -tumor_bam {input.tumor_bam}
-//  -reference {params.normal_name}
-//  -reference_bam {input.normal_bam}
-//  -ref_genome {input.ref_fa}
-//  -bed {input.snp_bed}
-//  -threads {threads}
-//  -output_dir {params.outdir} 2>&1 | tee {log}
+//  """ \
+//  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga}g"
+//  AMBER \
+//  -tumor ${idPatient} \
+//  -tumor_bam ${bamTumor} \
+//  -reference ${idSampleNormal} \
+//  -reference_bam ${bamNormal} \
+//  -ref_genome ${genomeFasta} \
+//  -bed ${purpleHet} \
+//  -threads ${task.cpus} \
+//  -output_dir amber \
+//  2>&1 | tee {log} \
 //  """
 //}
 //
-//rule purple_amber:
-//    input:
-//        tumor_bam  = lambda wc: batch_by_name[wc.batch].tumor.bam,
-//        normal_bam = lambda wc: batch_by_name[wc.batch].normal.bam,
-//        snp_bed = hpc.get_ref_file(run.genome_build, 'purple_het'),
-//        ref_fa = hpc.get_ref_file(run.genome_build, 'fa'),
-//    output:
-//        'work/{batch}/purple/amber/{batch}.amber.baf',
-//        'work/{batch}/purple/amber/{batch}.amber.baf.pcf',
-//    params:
-//        normal_name = lambda wc: batch_by_name[wc.batch].normal.name,
-//        outdir = 'work/{batch}/purple/amber',
-//        jar = join(package_path(), 'jars', 'amber-2.3.jar'),
-//        xms = 5000,
-//        xmx = purple_mem,
-//    log:
-//        'log/purple/{batch}/{batch}.amber.log',
-//    benchmark:
-//        'benchmarks/{batch}/purple/{batch}-amber.tsv'
-//    resources:
-//        mem_mb = purple_mem,
-//    threads:
-//        threads_per_batch
-//    shell:
-//        conda_cmd.format('purple') +
+//process RunCobalt {
+//  label "purple"
+//
+//  tag {idSampleTumour + "_vs_" + idSampleNormal}
+//
+//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/cobalt", mode: params.publishDirMode
+//
+//  input:
+//  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForCobalt
+//  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
+//      genomeFasta,
+//      genomeIndex,
+//      genomeDict,
+//      purpleGC
+//  ])
+//
+//  output:
+//  set idPatient, idSampleNormal, idSampleTumour, '{batch}.cobalt', '{batch}.cobalt.ratio.pcf' into cobaltOutput
+//
+//  when: !params.onlyQC
+//
+//  script:
+//  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga}g"
+//  """ \
+//  COBALT ${jvm_opts} \
+//  -tumor ${idPatient} \
+//  -tumor_bam ${bamTumor} \
+//  -reference ${idSampleNormal} \
+//  -reference_bam ${bamNormal} \
+//  -ref_genome ${genomeFasta} \
+//  -gc_profile ${purpleGC} \
+//  -threads ${task.cpus} \
+//  -output_dir cobalt \
+//  2>&1 | tee {log} \
+//  """
+//}
+//
+//process RunPurple {
+//  label "purple"
+//
+//  tag {idSampleTumour + "_vs_" + idSampleNormal}
+//
+//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/purple", mode: params.publishDirMode
+//
+//  input:
+//  set idPatient, idSampleNormal, idSampleTumour, cobaltDummy, cobaltDummyPcf from cobaltOutput
+//  set idPatient, idSampleNormal, idSampleTumour, amberDummy, amberDummyPcf from amberOutput
+//  set caller, idPatient, idSampleNormal, idSampleTumour, mantaVCF, mantaIndex from mantaOutput
+//  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
+//      genomeFasta,
+//      genomeIndex,
+//      genomeDict,
+//      purpleGC
+//  ])
+//
+//  output:
+//  set val("PURPLE"), idPatient, idSampleNormal, idSampleTumour, '*.purple.cnv', '*.purple.gene.cnv', '*.purple.germline.cnv', '*.purple.sv.vcf.gz', '*.purple.sv.vcf.gz.tbi', '*.purple.purity', '*.purple.qc' into purpleOutput
+//
+//  when: !params.onlyQC
+//
+//  script:
+//  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga}g"
+////  -somatic_vcf ${somaticVCF}
+////  - circos circos
+//  """ \
+//  PURPLE ${jvm_opts} \
+//  -rund_ir purple \
+//  -output_dir purple \
+//  -reference ${idSampleNormal} \
+//  -tumor ${batchName} \
+//  -threads ${task.cpus} \
+//  -gc_profile ${purpleGC} \
+//  -structural_vcf ${mantaVCF}
+//  2>&1 | tee {log} \
+//  """
+//}
 
 //(strelkaIndels, strelkaSNVS) = strelkaOutput.into(2)
 //(mantaSomaticSV, mantaDiploidSV) = mantaOutput.into(2)
-
+//
 //vcfForQC = Channel.empty().mix(
 //  vcfConcatenated.map {
 //    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
@@ -606,29 +605,6 @@ if (params.verbose) vcfConcatenated = vcfConcatenated.view {
 //}
 //
 //vcfReport.close()
-//
-//process GetVersionAlleleCount {
-//  publishDir "${params.outDir}/Reports/ToolsVersion", mode: params.publishDirMode
-//  output: file("v_*.txt")
-//  when: 'ascat' in tools && !params.onlyQC
-//
-//  script:
-//  """
-//  alleleCounter --version > v_allelecount.txt
-//  """
-//}
-//
-//process GetVersionASCAT {
-//  publishDir "${params.outDir}/Reports/ToolsVersion", mode: params.publishDirMode
-//  output: file("v_*.txt")
-//  when: 'ascat' in tools && !params.onlyQC
-//
-//  script:
-//  """
-//  R --version > v_r.txt
-//  cat ${baseDir}/scripts/ascat.R | grep "ASCAT version" > v_ascat.txt
-//  """
-//}
 
 /*
 ================================================================================
