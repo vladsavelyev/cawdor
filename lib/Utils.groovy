@@ -1,26 +1,29 @@
 import static nextflow.Nextflow.file
-import nextflow.Channel
 import static nextflow.Nextflow.exit
+import static nextflow.Nextflow.error
+import nextflow.Channel
 
 class Utils {
-  
+
   static def findRefFile(params, key) {
     def genomes = params.genomes
     def genome = params.genome
 
-    if (!(genome in genomes))
+    if (!(genome in genomes)) {
       exit 1, "Genome ${genome} not found in configuration. Available: ${genomes}"
+    }
 
-    def path = genomes[genome]."${key}"
+    def path = genomes[genome][key]
+
     if (!path) {
-      path = genomes["default"]."${key}"
+      path = genomes["default"][key]
       if (!path) exit 1, "Missing key ${key} for genome ${genome}"
     }
 
-    path = file(path)
+    path = file(params.genomes_base + "/" + path)
     if (!Utils.checkRefExistence(key, path)) {
-      println "Not found reference file ${key}: ${path}"
-      return null
+      println("Not found reference file ${key} ${path}")
+      path = null
     }
     return path
   }
@@ -32,7 +35,7 @@ class Utils {
     // this is an expanded wildcard: we can assume all files exist
     if (f instanceof List && f.size() > 0) return true
     else if (!f.exists()) {
-      println "Missing reference files: ${key} ${fileToCheck}"
+      exit 1, "Missing reference files: ${key} ${fileToCheck}"
       return false
     }
     return true
@@ -44,11 +47,13 @@ class Utils {
     return n == 1
   }
 
-  // Return status [0,1]
+  // Return status [0, 1]
   // 0 == Normal, 1 == Tumor
   static def returnStatus(it) {
-    if (!(it in [0, 1])) exit 1, "Status is not recognized in TSV file: ${it}, see --help for more information"
-    return it
+    if (it == 'T') it = '1'
+    if (it == 'N') it = '0'
+    if (!(it in ['0', '1'])) exit 1, "Status is not recognized in TSV file: ${it}, see --help for more information"
+    return it.toInteger()
   }
 
   // Return file if it exists
@@ -95,7 +100,7 @@ class Utils {
       .map { row ->
         Utils.checkNumberOfItem(row, 5)
         def idPatient = row[0]
-        def status    = Utils.returnStatus(row[1].toInteger())
+        def status    = Utils.returnStatus(row[1])
         def idSample  = row[2]
         def bamFile   = Utils.returnFile(row[3])
         def baiFile   = Utils.returnFile(row[4])
@@ -106,5 +111,132 @@ class Utils {
         return [ idPatient, status, idSample, bamFile, baiFile ]
       }
   }
+
+  static def extractSamplesFromTSV(tsvFile) {
+    // Channeling the TSV file containing FASTQ or BAM
+    // Format is: "subject status sample lane fastq1 fastq2"
+    // or: "subject status sample lane bam"
+    def samplesFromTSV = Channel.create()
+
+    Channel
+      .from(tsvFile)
+      .splitCsv(sep: '\t')
+      .subscribe onNext: { row ->
+        if (row.size == 0) return
+        if (row[0] ==~ /^#.*/) return
+
+        println("TSV row: ${row}")
+        String idPatient = row[0]
+        int status       = Utils.returnStatus(row[1])
+        String idSample  = row[2]
+        String idLane    = row[3]
+        def file1        = Utils.returnFile(row[4])
+        def file2        = file("null")
+
+        if (Utils.isFq(file1)) {
+          if (row.size > 5) {
+            file2 = Utils.returnFile(row[5])
+            if (!Utils.isFq(file2)) exit 1, "R2 FastQ file ${file2} has the wrong extension. " +
+                    "See --help for more information"
+          }
+          else {
+            if (!file1.getName().contains('_R1')) exit 1, "Can't find R2 match for ${file1} as the file name " +
+                    "doesn't contain _R1. Workaround is to specify both R1 and R2 FastQ files in the TSV. " +
+                    "See --help for more information"
+            file2 = file(file1.toString().replace('_R1', '_R2'))
+            if (!file2.exists()) error "Not found R2 FastQ file '${file2}'"
+          }
+          samplesFromTSV.bind([idPatient, status, idSample, idLane, file1, file2])
+        }
+        else if (file1.toString().toLowerCase().endsWith(".bam")) {
+          Utils.checkNumberOfItem(row, 5)
+          if (!Utils.hasExtension(file1, "bam")) exit 1, "File: ${file1} has the wrong extension. " +
+                  "See --help for more information"
+          samplesFromTSV.bind([idPatient, status, idSample, idLane, file1, file2])
+        }
+        else if (file1.isDirectory()) {
+          def rows = Utils.extractFastqFromDir(file1)
+          rows.subscribe { r ->
+            file1 = Utils.returnFile(r[4])
+            file2 = r.size() > 5 ? Utils.returnFile(r[5]) : file("null")
+            samplesFromTSV.bind([idPatient, status, idSample, r[3], file1, file2])
+          }
+        } else {
+          "No recognisable extention for input file: ${file1}"
+        }
+      }, onComplete: { samplesFromTSV.close() }
+
+    samplesFromTSV
+  }
+
+  static def extractFastqFromDir(pattern) {
+    // create a channel of FASTQs from a directory pattern such as
+    // "my_samples/*/". All samples are considered 'normal'.
+    // All FASTQ files in subdirectories are collected and emitted;
+    // they must have _R1 and _R2 in their names.
+
+    def fastqFromDir = Channel.create()
+
+    // a temporary channel does all the work
+    Channel
+      .fromPath(pattern, type: 'dir')
+      .ifEmpty { error "No directories found matching pattern '${pattern}'" }
+      .subscribe onNext: { sampleDir ->
+        for (path1 in file("${sampleDir}/**_R1*.fastq.gz")) {
+          assert path1.getName().contains('_R1')
+          def path2 = file(path1.toString().replace('_R1', '_R2'))
+          if (!path2.exists()) error "Path '${path2}' not found"
+          // the last name of the sampleDir is assumed to be a unique sample id
+          String sampleId = path1.getParent().getName().toString()
+          String patient = sampleId
+          def (String flowcell, int lane) = Utils.flowcellLaneFromFastq(path1)
+          int status = 0  // normal (not tumor)
+          GString rgId = "${flowcell}.${sampleId}.${lane}"
+          List row = [patient, status, sampleId, rgId, path1, path2]
+          fastqFromDir.bind(row)
+        }
+      }, onComplete: { fastqFromDir.close() }
+
+//    def tmp
+//    (fastqFromDir, tmp) = fastqFromDir.into(2)
+//    tmp.toList().subscribe onNext: {
+//      if (it.size() == 0) {
+//        exit 1, "No FASTQ files found in ${pattern}"
+//      } else {
+//        println "Found FASTQ in dir ${pattern}: ${it}"
+//      }
+//    }, onComplete: { tmp.close() }
+    fastqFromDir
+  }
+
+  static def flowcellLaneFromFastq(path) {
+    // parse first line of a FASTQ file (optionally gzip-compressed)
+    // and return the flowcell id and lane number.
+    // expected format:
+    // xx:yy:FLOWCELLID:LANE:... (seven fields)
+    // or
+    // FLOWCELLID:LANE:xx:... (five fields)
+    InputStream fileStream = new FileInputStream(path.toFile())
+    InputStream gzipStream = new java.util.zip.GZIPInputStream(fileStream)
+    Reader decoder = new InputStreamReader(gzipStream, 'ASCII')
+    BufferedReader buffered = new BufferedReader(decoder)
+    def line = buffered.readLine()
+    assert line.startsWith('@')
+    line = line.substring(1)
+    def fields = line.split(' ')[0].split(':')
+    String fcid
+    int lane
+    if (fields.size() == 7) {
+      // CASAVA 1.8+ format
+      fcid = fields[2]
+      lane = fields[3].toInteger()
+    }
+    else if (fields.size() == 5) {
+      fcid = fields[0]
+      lane = fields[1].toInteger()
+    }
+    [fcid, lane]
+  }
+
 }
 

@@ -18,7 +18,7 @@ if (params.containsKey("samples")) {
     exit 1, "Input --samples file ${tsvFile} does not exist"
   }
 } else {
-  tsvFile = "${params.outDir}/samples.tsv"
+  tsvFile = "${params.outDir}/Align/samples.tsv"
   if (!file(tsvFile).exists()) {
     exit 1, "${tsvFile} not found in output directory. Make sure you ran align.nf on this folder. See --help"
   }
@@ -673,7 +673,7 @@ def minimalInformationMessage() {
   log.info "Out dir     : " + params.outDir
   log.info "Input path  : " + tsvFile
   log.info "Genome      : " + params.genome
-  log.info "Genomes dir : " + params.genome_base
+  log.info "Genomes dir : " + params.genomes_base
   log.info "Target BED  : " + params.targetBED
   log.info "Containers"
   if (params.containsKey("repository"))

@@ -156,13 +156,13 @@ You can find the keys to specify the genomes in the [iGenomes config file](../co
 Presets exist for `raijin` and `spartan` environments. For other machines, provide the location of the genomes with `--genomes_dir` option, with the directory having the following structure:
 
 ```
-bwaIndex         = "${params.genome_base}/${params.genome}/${params.genome}.fa.{amb,ann,bwt,pac,sa}"
-genomeDict       = "${params.genome_base}/${params.genome}/${params.genome}.dict"
-genomeFasta      = "${params.genome_base}/${params.genome}/${params.genome}.fa"
-genomeIndex      = "${params.genome_base}/${params.genome}/${params.genome}.fa.fai"
-intervals        = "${params.genome_base}/${params.genome}/wgs_calling_regions_CAW.list"
-dbsnp            = "${params.genome_base}/${params.genome}/dbsnp-151.vcf.gz"
-dbsnpIndex       = "${params.genome_base}/${params.genome}/dbsnp-151.vcf.gz.tbi"
+bwaIndex         = "${params.genomes_base}/${params.genome}/${params.genome}.fa.{amb,ann,bwt,pac,sa}"
+genomeDict       = "${params.genomes_base}/${params.genome}/${params.genome}.dict"
+genomeFasta      = "${params.genomes_base}/${params.genome}/${params.genome}.fa"
+genomeIndex      = "${params.genomes_base}/${params.genome}/${params.genome}.fa.fai"
+intervals        = "${params.genomes_base}/${params.genome}/wgs_calling_regions_CAW.list"
+dbsnp            = "${params.genomes_base}/${params.genome}/dbsnp-151.vcf.gz"
+dbsnpIndex       = "${params.genomes_base}/${params.genome}/dbsnp-151.vcf.gz.tbi"
 vepCacheVersion  = "94"
 ```
 

@@ -10,22 +10,33 @@ genomeIndex = Utils.findRefFile(params, 'genomeIndex')
 genomeDict  = Utils.findRefFile(params, 'genomeDict')
 bwaIndex    = Utils.findRefFile(params, 'bwaIndex')
 if (![genomeFasta, genomeIndex, genomeDict, bwaIndex].every())
-  exit 1, "Missing reference files for alignment. See --help for more information"
+  exit 1, "Missing reference files for alignment in ${params.genomes_base} for genome ${params.genome}. " +
+          "See --help for more information"
 
-inputFiles = Channel.empty()
+def inputFiles = Channel.empty()
+def inputPath = file("null")
 if (params.containsKey("samples")) {
   inputPath = file(params.samples)
-  inputFiles = extractSample(inputPath)
+  inputFiles = Utils.extractSamplesFromTSV(inputPath)
+  (inputFiles, fastqTmp) = inputFiles.into(2)
+  fastqTmp.toList().subscribe onNext: {
+    if (it.size() == 0) {
+      exit 1, "No FASTQ files found in TSV file '${params.samples}'"
+    }
+  }
 } else if (params.containsKey("samplesDir")) {
-  inputFiles = extractFastqFromDir(params.samplesDir)
+  inputPath = params.samplesDir  // used in the reports
+  inputFiles = Utils.extractFastqFromDir(params.samplesDir)
   (inputFiles, fastqTmp) = inputFiles.into(2)
   fastqTmp.toList().subscribe onNext: {
     if (it.size() == 0) {
       exit 1, "No FASTQ files found in --samplesDir directory '${params.samplesDir}'"
     }
   }
-  inputPath = params.samplesDir  // used in the reports
-} else exit 1, 'No samples were defined with either --samples input.tsv or --samplesDir /input_dir, see --help'
+} else {
+  exit 1, 'No samples were defined with either --samples input.tsv or --samplesDir /input_dir, see --help'
+}
+
 
 minimalInformationMessage()
 
@@ -45,20 +56,20 @@ if (params.verbose) inputFiles = inputFiles.view {
 }
 
 process FastQC {
-  tag {idPatient + "-" + idRun}
+  tag {idPatient + "-" + idLane}
 
-  publishDir "${params.outDir}/Reports/FastQC/${idRun}", mode: params.publishDirMode
+  publishDir "${params.outDir}/Reports/FastQC/${idLane}", mode: params.publishDirMode
 
   input:
-    set idPatient, status, idSample, idRun, file(inputFile1), file(inputFile2) from inputFilesforFastQC
+    set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputFilesforFastQC
 
   output:
     file "*_fastqc.{zip,html}" into fastQCreport
 
   script:
-  inputFiles = Utils.isFq(inputFile1) ? "${inputFile1} ${inputFile2}" : "${inputFile1}"
+  def inputs = Utils.isFq(inputFile1) ? "${inputFile1} ${inputFile2}" : "${inputFile1}"
   """
-  fastqc -t 2 -q ${inputFiles}
+  fastqc -t 2 -q ${inputs}
   """
 }
 
@@ -68,21 +79,23 @@ if (params.verbose) fastQCreport = fastQCreport.view {
 }
 
 process MapReads {
-  tag {idPatient + "-" + idRun}
+  tag {idPatient + "-" + idLane}
 
   input:
-    set idPatient, status, idSample, idRun, file(inputFile1), file(inputFile2) from inputFiles
+    set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputFiles
     set file(genomeFasta), file(bwaIndex) from Channel.value([genomeFasta, bwaIndex])
 
   output:
-    set idPatient, status, idSample, idRun, file("${idRun}.bam") into (mappedBam, mappedBamForQC)
+    set idPatient, status, idSample, idLane, file("${idLane}.bam") into mappedBam
 
   when: !params.onlyQC
 
   script:
   CN = ""
-  if (params.containsKey("sequencing_center")) CN = "CN:${params.sequencing_center}\\t"
-  readGroup = "@RG\\tID:${idRun}\\t${CN}PU:${idRun}\\tSM:${idSample}\\tLB:${idSample}\\tPL:illumina"
+  if (params.containsKey("sequencing_center")) {
+    CN = 'CN:' + params.get("sequencing_center") + '\\t'
+  }
+  readGroup = "@RG\\tID:${idLane}\\t${CN}PU:${idLane}\\tSM:${idSample}\\tLB:${idSample}\\tPL:illumina"
   // adjust mismatch penalty for tumor samples
   extra = status == 1 ? "-B 3" : ""
 
@@ -93,15 +106,15 @@ process MapReads {
     """ \
     ${bwaMemCmd} ${inputFile1} ${inputFile2} \
     | ${sortCmd} \
-    > ${idRun}.bam
+    > ${idLane}.bam \
     """
-  } else if (SarekUtils.hasExtension(inputFile1, "bam")) {
+  } else if (Utils.hasExtension(inputFile1, "bam")) {
     """ \
     samtools sort -n -o -l 1 -@ ${task.cpus} -m ${task.memory.toGiga()}G ${inputFile1} \
     | bedtools bamtofastq -i /dev/stdin -fq /dev/stdout -fq2 /dev/stdout \
     | ${bwaMemCmd} \
     | ${sortCmd} \
-    > ${idRun}.bam
+    > ${idLane}.bam \
     """
   }
 }
@@ -113,7 +126,7 @@ groupedBam = Channel.create()
 mappedBam.groupTuple(by:[0,1,2])
   .choice(singleBam, groupedBam) {it[2].size() > 1 ? 1 : 0}
 singleBam = singleBam.map {
-  idPatient, status, idSample, idRun, bam ->
+  idPatient, status, idSample, idLane, bam ->
   [idPatient, status, idSample, bam]
 }
 
@@ -121,7 +134,7 @@ process MergeBams {
   tag {idPatient + "-" + idSample}
 
   input:
-    set idPatient, status, idSample, idRun, file(bam) from groupedBam
+    set idPatient, status, idSample, idLane, file(bam) from groupedBam
 
   output:
     set idPatient, status, idSample, file("${idSample}.bam") into mergedBam
@@ -149,15 +162,9 @@ if (params.verbose) mergedBam = mergedBam.view {
 mergedBam = mergedBam.mix(singleBam)
 
 if (params.verbose) mergedBam = mergedBam.view {
-  "BAM for MarkDuplicates:\n\
+  "All per-sample BAMs to be deduplicated:\n\
   ID    : ${it[0]}\tStatus: ${it[1]}\tSample: ${it[2]}\n\
   File  : [${it[3].fileName}]"
-}
-
-if (params.verbose) mappedBam = mappedBam.view {
-  "Mapped BAM (single or to be merged):\n\
-  ID    : ${it[0]}\tStatus: ${it[1]}\tSample: ${it[2]}\tRun   : ${it[3]}\n\
-  File  : [${it[4].fileName}]"
 }
 
 process MarkDuplicates {
@@ -197,7 +204,7 @@ process MarkDuplicates {
 samplesTsv.map { idPatient, status, idSample, bam, bai ->
   "${idPatient}\t${status}\t${idSample}\t${params.outDir}/Align/${bam}\t${params.outDir}/Align/${bai}\n"
 }.collectFile(
-  name: 'samples.tsv', sort: true, storeDir: "${params.outDir}"
+  name: 'Align/samples.tsv', sort: true, storeDir: "${params.outDir}"
 )
 
 (bamForQualimap, bamForSamToolsStats) = duplicateMarkedBams.into(2)
@@ -257,105 +264,6 @@ if (params.verbose) samtoolsStatsReport = samtoolsStatsReport.view {
   File  : [${it.fileName}]"
 }
 
-/*
-================================================================================
-=                               F U N C T I O N S                              =
-================================================================================
-*/
-
-def extractSample(tsvFile) {
-  // Channeling the TSV file containing FASTQ or BAM
-  // Format is: "subject status sample lane fastq1 fastq2"
-  // or: "subject status sample lane bam"
-  Channel.from(tsvFile)
-  .splitCsv(sep: '\t')
-  .map { row ->
-    def idPatient  = row[0]
-    def status     = Utils.returnStatus(row[1].toInteger())
-    def idSample   = row[2]
-    def idRun      = row[3]
-    def file1      = Utils.returnFile(row[4])
-    def file2      = file("null")
-    if (Utils.isFq(file1)) {
-      Utils.checkNumberOfItem(row, 6)
-      file2 = Utils.returnFile(row[5])
-      if (!Utils.isFq(file2)) exit 1, "File: ${file2} has the wrong extension. See --help for more information"
-    }
-    else if (file1.toString().toLowerCase().endsWith(".bam")) {
-      Utils.checkNumberOfItem(row, 5)
-      if (!Utils.hasExtension(file1, "bam")) exit 1, "File: ${file1} has the wrong extension. See --help for more information"
-    }
-    else if (file1.isDirectory()) {
-      row = extractFastqFromDir(file1)
-      file1 = row[4]
-      file2 = row.size() > 5 ? row[5] : file("null")
-    } else {
-      "No recognisable extention for input file: ${file1}"
-    }
-
-    [idPatient, status, idSample, idRun, file1, file2]
-  }
-}
-
-def extractFastqFromDir(pattern) {
-  // create a channel of FASTQs from a directory pattern such as
-  // "my_samples/*/". All samples are considered 'normal'.
-  // All FASTQ files in subdirectories are collected and emitted;
-  // they must have _R1_ and _R2_ in their names.
-
-  def fastq = Channel.create()
-
-  // a temporary channel does all the work
-  Channel
-    .fromPath(pattern, type: 'dir')
-    .ifEmpty { error "No directories found matching pattern '${pattern}'" }
-    .subscribe onNext: { sampleDir ->
-      for (path1 in file("${sampleDir}/**_R1_*.fastq.gz")) {
-        assert path1.getName().contains('_R1_')
-        path2 = file(path1.toString().replace('_R1_', '_R2_'))
-        if (!path2.exists()) error "Path '${path2}' not found"
-        // the last name of the sampleDir is assumed to be a unique sample id
-        sampleId = path1.getParent().getName().toString()
-        patient = sampleId
-        (flowcell, lane) = flowcellLaneFromFastq(path1)
-        status = 0  // normal (not tumor)
-        rgId = "${flowcell}.${sampleId}.${lane}"
-        result = [patient, status, sampleId, rgId, path1, path2]
-        fastq.bind(result)
-      }
-  }, onComplete: { fastq.close() }
-
-  fastq
-}
-
-def flowcellLaneFromFastq(path) {
-  // parse first line of a FASTQ file (optionally gzip-compressed)
-  // and return the flowcell id and lane number.
-  // expected format:
-  // xx:yy:FLOWCELLID:LANE:... (seven fields)
-  // or
-  // FLOWCELLID:LANE:xx:... (five fields)
-  InputStream fileStream = new FileInputStream(path.toFile())
-  InputStream gzipStream = new java.util.zip.GZIPInputStream(fileStream)
-  Reader decoder = new InputStreamReader(gzipStream, 'ASCII')
-  BufferedReader buffered = new BufferedReader(decoder)
-  def line = buffered.readLine()
-  assert line.startsWith('@')
-  line = line.substring(1)
-  def fields = line.split(' ')[0].split(':')
-  String fcid
-  int lane
-  if (fields.size() == 7) {
-    // CASAVA 1.8+ format
-    fcid = fields[2]
-    lane = fields[3].toInteger()
-  }
-  else if (fields.size() == 5) {
-    fcid = fields[0]
-    lane = fields[1].toInteger()
-  }
-  [fcid, lane]
-}
 
 def helpMessage() {
   // Display help message
@@ -394,9 +302,9 @@ def minimalInformationMessage() {
   log.info "Cont Engine : " + workflow.containerEngine
   log.info "Executor    : " + config.process.executor
   log.info "Out dir     : " + params.outDir
-  log.info "Input path  : " + inputPath
+//  log.info "Input path  : " + inputPath
   log.info "Genome      : " + params.genome
-  log.info "Genomes dir : " + params.genome_base
+  log.info "Genomes dir : " + params.genomes_base
   log.info "Containers"
   if (params.containsKey("repository"))
     log.info "  Repository   : " + params.repository
