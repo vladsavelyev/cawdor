@@ -8,12 +8,38 @@
 
 ## Introduction
 
-The pipeline is built using [Nextflow](https://www.nextflow.io), a workflow tool to run tasks across multiple compute infrastructures in a portable manner. The structure is inspired by [bcbio-nextgen](https://github.com/bcbio/bcbio-nextgen), a python-based NGS analysis framework; the implementation is inspired by [Sarek](https://github.com/SciLifeLab/Sarek), a nextflow-based cancer analysis workflow; some approaches are borrowed from [Hartwig Medical Foundation pipeline](https://github.com/hartwigmedical/hmftools/).
-
+The pipeline is built using [Nextflow](https://www.nextflow.io), a workflow tool to run tasks across multiple compute infrastructures in a portable manner. The structure is inspired by [bcbio-nextgen](https://github.com/bcbio/bcbio-nextgen), a python-based NGS analysis framework; the nextflow implementation is inspired by [Sarek](https://github.com/SciLifeLab/Sarek), a cancer analysis workflow, and [nf-core](https://nf-co.re/) templates; some bioinformatics approaches are borrowed from [Hartwig Medical Foundation pipeline](https://github.com/hartwigmedical/hmftools/). Post-processing was originally a part of Snakemake-based workflow [umccrise](https://github.com/umccr/umccrise).
 
 ## Installation
 
-For installation, follow the nextflow and nf-core documentation:
+Install java 8 or create a conda environment (nextflow package brings java 8):
+
+```
+conda create cawdor -c bioconda nextflow
+conda activate cawdor
+```
+
+If you want to run on [NCI])(https://opus.nci.org.au/display/Help/Raijin+User+Guide#RaijinUserGuide-InteractivePBSJobs) cluster, clone and compile custom nextflow instance:
+
+```
+git clone https://github.com/vladsaveliev/nextflow
+make compile pack
+cp build/releases/nextflow-* $CONDA_PREFIX/bin/nextflow
+chmod +x $CONDA_PREFIX/bin/nextflow
+```
+
+For convenience, create a loader script with the following contents:
+
+```
+unset PYTHONPATH
+unset PERL5LIB
+export PATH=$CONDA_PREFIX/bin:$CONDA_PREFIX/../../bin:$PATH
+export CONDA_PREFIX=$CONDA_PREFIX
+export NXF_HOME=$(pwd)/.nextflow
+export NXF_WORK=$(pwd)/scratch
+```
+
+Also check nextflow and nf-core documentation:
 
 1. [Installation](https://nf-co.re/usage/installation)
 2. Pipeline configuration
@@ -40,6 +66,10 @@ Note that the pipeline will create the following files in your working directory
 ```bash
 work/            # Directory containing the nextflow working files
 Results/         # Finished results (configurable, see below)
+```
+
+It will also
+
 .nextflow.log    # Log file from Nextflow
 .nextflow/       # Folder with other Nextflow hidden files
 ```
