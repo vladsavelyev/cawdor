@@ -70,6 +70,7 @@ process CreateIntervalBeds {
         longest = t
       chunk += t
       print \$0 > chunk_fname
+      close(chunk_fname)
     }' ${intervals}
     """
   else
@@ -77,6 +78,7 @@ process CreateIntervalBeds {
     awk -v FS="[:-]" '{
       chunk_fname = sprintf("%s_%d-%d.bed", \$1, \$2, \$3);
       printf("%s\\t%d\\t%d\\n", \$1, \$2-1, \$3) > chunk_fname
+      close(chunk_fname)
     }' ${intervals}
     """
 }
