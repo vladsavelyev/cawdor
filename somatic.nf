@@ -291,8 +291,6 @@ if (params.verbose) vcfConcatenated = vcfConcatenated.view {
 process RunManta {
   tag {idSampleTumour + "_vs_" + idSampleNormal}
 
-  beforeScript 'export PATH=$NXF_CONDA_CACHEDIR/py2/bin:$PATH'
-
   publishDir "${params.outDir}/VariantCalling/${idPatient}/Manta", mode: params.publishDirMode
 
   input:
@@ -368,11 +366,11 @@ process RunStrelkaBP {
   when: !params.onlyQC
 
   script:
-  beforeScript = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
+  targetsCmd = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
   options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
   outputFile = "${idPatient}-strelka.vcf.gz"
   """ \
-  ${beforeScript}
+  ${targetsCmd}
   configureStrelkaSomaticWorkflow.py \
   --tumor ${bamTumour} \
   --normal ${bamNormal} \
