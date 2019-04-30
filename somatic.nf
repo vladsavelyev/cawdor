@@ -124,12 +124,14 @@ process RunMutect {
   tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
 
   input:
-  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour,
-      file(bamTumour), file(baiTumour), file(intervalBed) from bamsForMutect
-  set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([genomeFasta, genomeIndex, genomeDict])
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
+      idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForMutect
+  set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
+      genomeFasta, genomeIndex, genomeDict])
 
   output:
-  set val("MuTect"), idPatient, idSampleNormal, idSampleTumour, file("${idPatient}-${intervalBed.baseName}.vcf") into mutectOutput
+  set val("MuTect"), idPatient, idSampleNormal, idSampleTumour,
+      file("${idPatient}-${intervalBed.baseName}.vcf") into mutectOutput
 
   when: !params.onlyQC
 
@@ -157,8 +159,8 @@ mutectOutput = mutectOutput.groupTuple(by:[0,1,2,3])  // group by normals
 //    file(genomeIndex) from Channel.value(genomeIndex)
 //
 //  output:
-//    set val("FreeBayes"), idPatient, idSampleNormal, idSampleTumour, file("${intervalBed.baseName}_${idSampleTumour}_vs_${idSampleNormal}.vcf") \
-//        into freebayesOutput
+//    set val("FreeBayes"), idPatient, idSampleNormal, idSampleTumour,
+//        file("${intervalBed.baseName}_${idSampleTumour}_vs_${idSampleNormal}.vcf") into freebayesOutput
 //
 //  when: !params.onlyQC
 //
@@ -186,8 +188,8 @@ process RunVarDict {
   tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
 
   input:
-  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
-                 idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForVardict
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour),
+    file(baiTumour), file(intervalBed) from bamsForVardict
   file(genomeFasta) from Channel.value(genomeFasta)
   file(genomeIndex) from Channel.value(genomeIndex)
 
@@ -200,7 +202,7 @@ process RunVarDict {
   tmpDir = file("tmp").mkdir()
   """ \
   unset JAVA_HOME && \
-  export VAR_DICT_OPTS='-Xms750m -Xmx3000m -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir}' && \
+  export VAR_DICT_OPTS='-Xms750m -Xmx${task.memory.toGiga()}g -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir}' && \
   vardict-java -G ${genomeFasta} \
   -N ${idSampleNormal} \
   -b "${bamTumour}|${bamNormal}" \
@@ -211,7 +213,8 @@ process RunVarDict {
   | var2vcf_paired.pl -P 0.9 -m 4.25 -f 0.01 -M  -N "${idSampleTumour}|${idSampleNormal}" \
   | bcftools filter -m '+' -s 'REJECT' -e 'STATUS !~ ".*Somatic"' \
   2> /dev/null \
-  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 && FORMAT/SBF[0] < 0.1 && FORMAT/NM[0] >= 2.0' \
+  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && \
+  FORMAT/VD[0] < 30 && FORMAT/SBF[0] < 0.1 && FORMAT/NM[0] >= 2.0' \
   | bcftools filter -i 'QUAL >= 0' \
   | sed 's/\\\\.*Somatic\\\\/Somatic/' \
   | sed 's/REJECT,Description=".*">/REJECT,Description="Not Somatic via VarDict">/' \
@@ -241,7 +244,8 @@ vardictOutput = vardictOutput.groupTuple(by:[0,1,2,3])
 //  | teststrandbias.R \
 //  | var2vcf_valid.pl -A -N ${idSampleNormal} -E -f 0.1
 //  | bcftools filter -i 'QUAL >= 0' \
-//  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 && INFO/SBF < 0.1 && INFO/NM >= 2.0' \
+//  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 \
+//  && INFO/SBF < 0.1 && INFO/NM >= 2.0' \
 //  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$4) } {print}' \
 //  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
 //  | awk -F\$'\t' -v OFS='\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
@@ -249,7 +253,7 @@ vardictOutput = vardictOutput.groupTuple(by:[0,1,2,3])
 //  | bgzip -c > ${vardictOutput} \
 //  """
 //}
-//
+
 
 // we are merging the VCFs that are called separately for different intervals
 // so we can have a single sorted VCF containing all the calls for a given caller
@@ -296,7 +300,8 @@ process RunManta {
   publishDir "${params.outDir}/VariantCalling/${idPatient}/Manta", mode: params.publishDirMode
 
   input:
-  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForManta
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour),
+    file(baiTumour) from bamsForManta
   file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
   set file(genomeFasta), file(genomeIndex) from Channel.value([
     genomeFasta,
@@ -312,11 +317,13 @@ process RunManta {
   when: !params.onlyQC
 
   script:
-  targetCmd = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
+  targetCmd = params.targetBED ?
+      "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" :
+      ""
   options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
   outputFile = "${idPatient}-manta.vcf.gz"
-  """
-  ${targetCmd}
+  """ \
+  ${targetCmd} \
   configManta.py \
   --normalBam ${bamNormal} \
   --tumorBam ${bamTumour} \
@@ -363,12 +370,15 @@ process RunStrelkaBP {
   ])
 
   output:
-  set val("Strelka"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaBPOutput
+  set val("Strelka"), idPatient, idSampleNormal, idSampleTumour,
+      file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaBPOutput
 
   when: !params.onlyQC
 
   script:
-  targetsCmd = params.targetBED ? "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" : ""
+  targetsCmd = params.targetBED ?
+      "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" :
+      ""
   options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
   outputFile = "${idPatient}-strelka.vcf.gz"
   """ \
@@ -412,7 +422,7 @@ process RunAmber {
   ])
 
   output:
-  set idPatient, idSampleNormal, idSampleTumour, "amber/${idPatient}.amber.baf", "amber/${idPatient}.amber.baf.pcf" into amberOutput
+  set idPatient, idSampleNormal, idSampleTumour, file('amber/*') into amberOutput
 
   when: !params.onlyQC
 
@@ -439,7 +449,8 @@ process RunCobalt {
   publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/cobalt", mode: params.publishDirMode
 
   input:
-  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForCobalt
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
+      idSampleTumour, file(bamTumour), file(baiTumour) from bamsForCobalt
   set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
       genomeFasta,
       genomeIndex,
@@ -448,7 +459,7 @@ process RunCobalt {
   ])
 
   output:
-  set idPatient, idSampleNormal, idSampleTumour, '{batch}.cobalt', '{batch}.cobalt.ratio.pcf' into cobaltOutput
+  set idPatient, idSampleNormal, idSampleTumour, file('cobalt/*') into cobaltOutput
 
   when: !params.onlyQC
 
@@ -475,9 +486,9 @@ process RunPurple {
   publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/purple", mode: params.publishDirMode
 
   input:
-  set idPatient, idSampleNormal, idSampleTumour, cobaltDummy, cobaltDummyPcf from cobaltOutput
-  set idPatient, idSampleNormal, idSampleTumour, amberDummy, amberDummyPcf from amberOutput
-  set caller, idPatient, idSampleNormal, idSampleTumour, mantaVCF, mantaIndex from mantaOutput
+  set idPatient, idSampleNormal, idSampleTumour, file(amberFiles) from amberOutput
+  set idPatient, idSampleNormal, idSampleTumour, file(cobaltFiles) from cobaltOutput
+  set caller, idPatient, idSampleNormal, idSampleTumour, file(mantaVCF), file(mantaIndex) from mantaOutput
   set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
       genomeFasta,
       genomeIndex,
@@ -486,9 +497,10 @@ process RunPurple {
   ])
 
   output:
-  set val("PURPLE"), idPatient, idSampleNormal, idSampleTumour, '*.purple.cnv', '*.purple.gene.cnv',
-      '*.purple.germline.cnv', '*.purple.sv.vcf.gz', '*.purple.sv.vcf.gz.tbi', '*.purple.purity',
-      '*.purple.qc' into purpleOutput
+  set val("PURPLE"), idPatient, idSampleNormal, idSampleTumour, file('purple/*') into purpleOutput
+//      '*.purple.cnv', '*.purple.gene.cnv',
+//      '*.purple.germline.cnv', '*.purple.sv.vcf.gz', '*.purple.sv.vcf.gz.tbi', '*.purple.purity',
+//      '*.purple.qc' into purpleOutput
 
   when: !params.onlyQC
 
@@ -497,11 +509,14 @@ process RunPurple {
 //  -somatic_vcf ${somaticVCF}
 //  - circos circos
   """ \
+  mkdir -p purple/amber purple/cobalt
+  mv ${amberFiles} purple/amber
+  mv ${cobaltFiles} purple/cobalt
   PURPLE ${jvm_opts} \
-  -rund_ir purple \
+  -run_dir purple \
   -output_dir purple \
   -reference ${idSampleNormal} \
-  -tumor ${batchName} \
+  -tumor ${idPatient} \
   -threads ${task.cpus} \
   -gc_profile ${purpleGC} \
   -structural_vcf ${mantaVCF} \
