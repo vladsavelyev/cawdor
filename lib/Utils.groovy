@@ -105,15 +105,19 @@ class Utils {
       if (row.size() == 0) return
       println("TSV row: ${row}")
 
-      Utils.checkNumberOfItem(row, 5)
+      if (row.size() < 4) exit 1, "Malformed row in TSV file: ${row}, see --help for more information"
       def idPatient = row[0]
       def status    = Utils.returnStatus(row[1])
       def idSample  = row[2]
       def bamFile   = Utils.returnFile(row[3])
-      def baiFile   = Utils.returnFile(row[4])
+      def baiFile
       if (!Utils.hasExtension(bamFile, ".bam")) exit 1, "File: ${bamFile} has the wrong extension. See --help for more information"
-      if (!Utils.hasExtension(baiFile, ".bai")) exit 1, "File: ${baiFile} has the wrong extension. See --help for more information"
-
+      if (row.size() >= 5) {
+        baiFile   = Utils.returnFile(row[4])
+        if (!Utils.hasExtension(baiFile, ".bai")) exit 1, "File: ${baiFile} has the wrong extension. See --help for more information"
+      } else {
+        baiFile = bamFile + ".bai"
+      }
       if (status == 0) normalsByPatient[idPatient] = [idSample, bamFile, baiFile]
       else             tumoursByPatient[idPatient] = [idSample, bamFile, baiFile]
     }
