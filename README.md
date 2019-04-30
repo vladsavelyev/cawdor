@@ -1,6 +1,6 @@
 # Cawdor
 
-**Cancer analysis workflow for (WGS) DNAseq or RNAseq**
+**Cancer analysis workflow for WGS and WTS sequencing data**
 
 [![Build Status](https://travis-ci.com/vladsaveliev/cawdor.svg?branch=master)](https://travis-ci.com/vladsaveliev/cawdor)
 [![Nextflow](https://img.shields.io/badge/nextflow-%E2%89%A50.32.0-brightgreen.svg)](https://www.nextflow.io/)
@@ -9,6 +9,13 @@
 ## Introduction
 
 The pipeline is built using [Nextflow](https://www.nextflow.io), a workflow tool to run tasks across multiple compute infrastructures in a portable manner. The structure is inspired by [bcbio-nextgen](https://github.com/bcbio/bcbio-nextgen), a python-based NGS analysis framework; the nextflow implementation is inspired by [Sarek](https://github.com/SciLifeLab/Sarek), a cancer analysis workflow, and [nf-core](https://nf-co.re/) templates; some bioinformatics approaches are borrowed from [Hartwig Medical Foundation pipeline](https://github.com/hartwigmedical/hmftools/). Post-processing was originally a part of Snakemake-based workflow [umccrise](https://github.com/umccr/umccrise).
+
+Currently supported variant calling for WGS tumor/normal paired samples:
+
+* Somatic variant calling: VarDict, Mutect2, Strelka2, [SAGE](https://github.com/hartwigmedical/hmftools/tree/master/sage)
+* Structural variant calling: Manta
+* CNV and heterogeneity: [PURPLE](https://github.com/hartwigmedical/hmftools/tree/master/purity-ploidy-estimator)
+* Germline variant calling: VarDict, GATK4 Haplotype Caller, Strelka2
 
 ## Installation
 
@@ -66,14 +73,9 @@ Note that the pipeline will create the following files in your working directory
 ```bash
 work/            # Directory containing the nextflow working files
 Results/         # Finished results (configurable, see below)
-```
-
-It will also
-
 .nextflow.log    # Log file from Nextflow
 .nextflow/       # Folder with other Nextflow hidden files
 ```
-
 
 ## Specifying input data
 
