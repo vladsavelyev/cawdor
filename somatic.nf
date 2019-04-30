@@ -393,119 +393,118 @@ if (params.verbose) strelkaBPOutput = strelkaBPOutput.view {
   File  : ${it[4].fileName}"
 }
 
-//process RunAmber {
-//  label "purple"
-//
-//  tag {idSampleTumour + "_vs_" + idSampleNormal}
-//
-//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/amber", mode: params.publishDirMode
-//
-//  input:
-//  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForAmber
-//  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleHet) from Channel.value([
-//    genomeFasta,
-//    genomeIndex,
-//    genomeDict,
-//    purpleHet
-//  ])
-//
-//  output:
-//  set idPatient, idSampleNormal, idSampleTumour, "amber/${idPatient}.amber.baf", "amber/${idPatient}.amber.baf.pcf" into amberOutput
-//
-//  when: !params.onlyQC
-//
-//  script:
-//  """ \
-//  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga}g"
-//  AMBER \
-//  -tumor ${idPatient} \
-//  -tumor_bam ${bamTumor} \
-//  -reference ${idSampleNormal} \
-//  -reference_bam ${bamNormal} \
-//  -ref_genome ${genomeFasta} \
-//  -bed ${purpleHet} \
-//  -threads ${task.cpus} \
-//  -output_dir amber \
-//  2>&1 | tee {log} \
-//  """
-//}
-//
-//process RunCobalt {
-//  label "purple"
-//
-//  tag {idSampleTumour + "_vs_" + idSampleNormal}
-//
-//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/cobalt", mode: params.publishDirMode
-//
-//  input:
-//  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForCobalt
-//  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
-//      genomeFasta,
-//      genomeIndex,
-//      genomeDict,
-//      purpleGC
-//  ])
-//
-//  output:
-//  set idPatient, idSampleNormal, idSampleTumour, '{batch}.cobalt', '{batch}.cobalt.ratio.pcf' into cobaltOutput
-//
-//  when: !params.onlyQC
-//
-//  script:
-//  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga}g"
-//  """ \
-//  COBALT ${jvm_opts} \
-//  -tumor ${idPatient} \
-//  -tumor_bam ${bamTumor} \
-//  -reference ${idSampleNormal} \
-//  -reference_bam ${bamNormal} \
-//  -ref_genome ${genomeFasta} \
-//  -gc_profile ${purpleGC} \
-//  -threads ${task.cpus} \
-//  -output_dir cobalt \
-//  2>&1 | tee {log} \
-//  """
-//}
-//
-//process RunPurple {
-//  label "purple"
-//
-//  tag {idSampleTumour + "_vs_" + idSampleNormal}
-//
-//  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/purple", mode: params.publishDirMode
-//
-//  input:
-//  set idPatient, idSampleNormal, idSampleTumour, cobaltDummy, cobaltDummyPcf from cobaltOutput
-//  set idPatient, idSampleNormal, idSampleTumour, amberDummy, amberDummyPcf from amberOutput
-//  set caller, idPatient, idSampleNormal, idSampleTumour, mantaVCF, mantaIndex from mantaOutput
-//  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
-//      genomeFasta,
-//      genomeIndex,
-//      genomeDict,
-//      purpleGC
-//  ])
-//
-//  output:
-//  set val("PURPLE"), idPatient, idSampleNormal, idSampleTumour, '*.purple.cnv', '*.purple.gene.cnv', '*.purple.germline.cnv', '*.purple.sv.vcf.gz', '*.purple.sv.vcf.gz.tbi', '*.purple.purity', '*.purple.qc' into purpleOutput
-//
-//  when: !params.onlyQC
-//
-//  script:
-//  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga}g"
-////  -somatic_vcf ${somaticVCF}
-////  - circos circos
-//  """ \
-//  PURPLE ${jvm_opts} \
-//  -rund_ir purple \
-//  -output_dir purple \
-//  -reference ${idSampleNormal} \
-//  -tumor ${batchName} \
-//  -threads ${task.cpus} \
-//  -gc_profile ${purpleGC} \
-//  -structural_vcf ${mantaVCF}
-//  2>&1 | tee {log} \
-//  """
-//}
+process RunAmber {
+  label "purple"
+
+  tag {idSampleTumour + "_vs_" + idSampleNormal}
+
+  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/amber", mode: params.publishDirMode
+
+  input:
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForAmber
+  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleHet) from Channel.value([
+    genomeFasta,
+    genomeIndex,
+    genomeDict,
+    purpleHet
+  ])
+
+  output:
+  set idPatient, idSampleNormal, idSampleTumour, "amber/${idPatient}.amber.baf", "amber/${idPatient}.amber.baf.pcf" into amberOutput
+
+  when: !params.onlyQC
+
+  script:
+  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga()}g"
+  """ \
+  AMBER ${jvm_opts} \
+  -tumor ${idPatient} \
+  -tumor_bam ${bamTumour} \
+  -reference ${idSampleNormal} \
+  -reference_bam ${bamNormal} \
+  -ref_genome ${genomeFasta} \
+  -bed ${purpleHet} \
+  -threads ${task.cpus} \
+  -output_dir amber \
+  """
+}
+
+process RunCobalt {
+  label "purple"
+
+  tag {idSampleTumour + "_vs_" + idSampleNormal}
+
+  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/cobalt", mode: params.publishDirMode
+
+  input:
+  set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour) from bamsForCobalt
+  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
+      genomeFasta,
+      genomeIndex,
+      genomeDict,
+      purpleGC
+  ])
+
+  output:
+  set idPatient, idSampleNormal, idSampleTumour, '{batch}.cobalt', '{batch}.cobalt.ratio.pcf' into cobaltOutput
+
+  when: !params.onlyQC
+
+  script:
+  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga()}g"
+  """ \
+  COBALT ${jvm_opts} \
+  -tumor ${idPatient} \
+  -tumor_bam ${bamTumour} \
+  -reference ${idSampleNormal} \
+  -reference_bam ${bamNormal} \
+  -ref_genome ${genomeFasta} \
+  -gc_profile ${purpleGC} \
+  -threads ${task.cpus} \
+  -output_dir cobalt \
+  """
+}
+
+process RunPurple {
+  label "purple"
+
+  tag {idSampleTumour + "_vs_" + idSampleNormal}
+
+  publishDir "${params.outDir}/VariantCalling/${idPatient}/Purple/purple", mode: params.publishDirMode
+
+  input:
+  set idPatient, idSampleNormal, idSampleTumour, cobaltDummy, cobaltDummyPcf from cobaltOutput
+  set idPatient, idSampleNormal, idSampleTumour, amberDummy, amberDummyPcf from amberOutput
+  set caller, idPatient, idSampleNormal, idSampleTumour, mantaVCF, mantaIndex from mantaOutput
+  set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
+      genomeFasta,
+      genomeIndex,
+      genomeDict,
+      purpleGC
+  ])
+
+  output:
+  set val("PURPLE"), idPatient, idSampleNormal, idSampleTumour, '*.purple.cnv', '*.purple.gene.cnv',
+      '*.purple.germline.cnv', '*.purple.sv.vcf.gz', '*.purple.sv.vcf.gz.tbi', '*.purple.purity',
+      '*.purple.qc' into purpleOutput
+
+  when: !params.onlyQC
+
+  script:
+  jvm_opts = "-Xms750m -Xmx${task.memory.toGiga()}g"
+//  -somatic_vcf ${somaticVCF}
+//  - circos circos
+  """ \
+  PURPLE ${jvm_opts} \
+  -rund_ir purple \
+  -output_dir purple \
+  -reference ${idSampleNormal} \
+  -tumor ${batchName} \
+  -threads ${task.cpus} \
+  -gc_profile ${purpleGC} \
+  -structural_vcf ${mantaVCF} \
+  """
+}
 
 //(strelkaIndels, strelkaSNVS) = strelkaOutput.into(2)
 //(mantaSomaticSV, mantaDiploidSV) = mantaOutput.into(2)
