@@ -196,7 +196,7 @@ process MarkDuplicates {
   --MAX_RECORDS_IN_RAM 50000 \
   --INPUT ${idSample}.bam \
   --METRICS_FILE ${idSample}.dedup_metrics.txt \
-  --TMP_DIR . \
+  --TMP_DIR tmp \
   --ASSUME_SORT_ORDER coordinate \
   --CREATE_INDEX true \
   --OUTPUT ${idSample}.dedup.bam \

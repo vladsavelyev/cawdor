@@ -22,7 +22,7 @@ class Utils {
 
     path = file(params.genomes_base + "/" + path)
     if (!Utils.checkRefExistence(key, path)) {
-      println("Not found reference file ${key} ${path}")
+      System.err.println "Not found reference file ${key} ${path}"
       path = null
     }
     return path
@@ -35,7 +35,7 @@ class Utils {
     // this is an expanded wildcard: we can assume all files exist
     if (f instanceof List && f.size() > 0) return true
     else if (!f.exists()) {
-      exit 1, "Missing reference files: ${key} ${fileToCheck}"
+      System.err.println "Missing reference files: ${key} ${fileToCheck}"
       return false
     }
     return true
@@ -95,21 +95,45 @@ class Utils {
   // Channeling the TSV file containing BAM.
   // Format is: "subject status sample bam bai"
   static def extractBams(tsvFile) {
-    Channel.from(tsvFile)
-      .splitCsv(sep: '\t')
-      .map { row ->
-        Utils.checkNumberOfItem(row, 5)
-        def idPatient = row[0]
-        def status    = Utils.returnStatus(row[1])
-        def idSample  = row[2]
-        def bamFile   = Utils.returnFile(row[3])
-        def baiFile   = Utils.returnFile(row[4])
 
-        if (!Utils.hasExtension(bamFile, ".bam")) exit 1, "File: ${bamFile} has the wrong extension. See --help for more information"
-        if (!Utils.hasExtension(baiFile, ".bai")) exit 1, "File: ${baiFile} has the wrong extension. See --help for more information"
+    Map tumoursByPatient = [:]
+    Map normalsByPatient = [:]
 
-        return [ idPatient, status, idSample, bamFile, baiFile ]
-      }
+    tsvFile.eachLine { line ->
+      if (line ==~ /^#.*/) return
+      List row = line.split(/\t/)
+      if (row.size() == 0) return
+      println("TSV row: ${row}")
+
+      Utils.checkNumberOfItem(row, 5)
+      def idPatient = row[0]
+      def status    = Utils.returnStatus(row[1])
+      def idSample  = row[2]
+      def bamFile   = Utils.returnFile(row[3])
+      def baiFile   = Utils.returnFile(row[4])
+      if (!Utils.hasExtension(bamFile, ".bam")) exit 1, "File: ${bamFile} has the wrong extension. See --help for more information"
+      if (!Utils.hasExtension(baiFile, ".bai")) exit 1, "File: ${baiFile} has the wrong extension. See --help for more information"
+
+      if (status == 0) normalsByPatient[idPatient] = [idSample, bamFile, baiFile]
+      else             tumoursByPatient[idPatient] = [idSample, bamFile, baiFile]
+    }
+
+    Boolean isErr = false
+    if (tumoursByPatient.keySet() - normalsByPatient.keySet()) {
+      System.err.println "Found tumours without normals with patientIDs: " + \
+          "${tumoursByPatient.keySet() - normalsByPatient.keySet()}. Check your TSV"
+      isErr = true
+    }
+    if (normalsByPatient.keySet() - tumoursByPatient.keySet()) {
+      System.err.println "Found normals without tumours with patientIDs: " + \
+          "${normalsByPatient.keySet() - tumoursByPatient.keySet()}. Check your TSV"
+      isErr = true
+    }
+    if (isErr) exit 1
+
+    tumoursByPatient.collect { patId, tumours ->
+      [patId] + normalsByPatient[patId] + tumours
+    }
   }
 
   static List extractSamplesFromTSV(tsvFile) {
