@@ -133,7 +133,7 @@ process RunMutect {
   set val("mutect"), idPatient, idSampleNormal, idSampleTumour,
       file("*.vcf.gz"), file("*.vcf.gz.tbi") into mutectOutput
 
-  when: !params.onlyQC
+  when: !params.strelkaOnly && !params.onlyQC
 
   script:
   outFile = "${idPatient}-interval_${intervalBed.baseName}.vcf.gz"
@@ -198,7 +198,7 @@ process RunVarDict {
   set val("vardict"), idPatient, idSampleNormal, idSampleTumour,
       file("*.vcf.gz"), file("*.vcf.gz.tbi") into vardictOutput
 
-  when: !params.onlyQC
+  when: !params.strelkaOnly && !params.onlyQC
 
   script:
   tmpDir = file("tmp").mkdir()
@@ -277,7 +277,7 @@ process ConcatVCFbyInterval {
 
   output:
   set variantCaller, idPatient, idSampleNormal, idSampleTumour,
-      file("*-${variantCaller}.vcf.gz"), file("*-${variantCaller}.vcf.tbi") into vcfConcatenated
+      file("*-${variantCaller}.vcf.gz"), file("*-${variantCaller}.vcf.gz.tbi") into vcfConcatenated
 
   when: !params.onlyQC
 
@@ -565,8 +565,6 @@ if (params.verbose) bcfReport = bcfReport.view {
   File  : [${it.fileName}]"
 }
 
-//bcfReport.close()
-
 process RunVcftools {
   tag {vcf}
 
@@ -607,8 +605,6 @@ if (params.verbose) vcfReport = vcfReport.view {
   File  : [${it.fileName}]"
 }
 
-//vcfReport.close()
-
 /*
 ================================================================================
 =                               F U N C T I O N S                              =
@@ -636,6 +632,8 @@ def helpMessage() {
   log.info "         smallGRCh37 (Use a small reference (Tests only))"
   log.info "    --onlyQC"
   log.info "       Run only QC tools and gather reports"
+  log.info "    --strelkaOnly"
+  log.info "       Run only Strelka variant caller (to avoid extensive run times for FFPE samples)"
   log.info "    --help"
   log.info "       you're reading it"
   log.info "    --verbose"
