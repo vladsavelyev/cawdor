@@ -552,9 +552,7 @@ process RunBcftoolsStats {
   set variantCaller, file(vcf) from vcfForBCFtools
 
   output:
-  file ("${vcf.simpleName}.bcf.tools.stats.out") into bcfReport
-
-  when: !params.noReports
+  file ("*_stats.txt") into bcfReport
 
   script:
   """
@@ -579,8 +577,6 @@ process RunVcftools {
 
   output:
   file ("${vcf.simpleName}.*") into vcfReport
-
-  when: !params.noReports
 
   script:
   """
@@ -625,12 +621,13 @@ def helpMessage() {
   log.info "    Usage:"
   log.info "       nextflow run variants.nf --sample <file.tsv> --genome <Genome>"
   log.info ""
-  log.info "    --sample <file.tsv>"
+  log.info "    --outDir <Directory>"
+  log.info "       Output directory. Can be the output from align.nf subworkflow, "
+  log.info "       in which case it will use Align/sample.tsv if --samples not specified"
+  log.info "    --samples <file.tsv>"
   log.info "       Specify a TSV file containing paths to sample files."
   log.info "    --test"
   log.info "       Use a test sample."
-  log.info "    --noReports"
-  log.info "       Disable QC tools and MultiQC to generate a HTML report"
   log.info "    --genome <Genome>"
   log.info "       Use a specific genome version."
   log.info "       Possible values are:"
