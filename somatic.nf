@@ -277,7 +277,7 @@ process ConcatVCFbyInterval {
 
   output:
   set variantCaller, idPatient, idSampleNormal, idSampleTumour,
-      file("*-${variantCaller}.vcf.gz{,.tbi}") into vcfConcatenated
+      file("*-${variantCaller}.vcf.gz"), file("*-${variantCaller}.vcf.tbi") into vcfConcatenated
 
   when: !params.onlyQC
 
@@ -372,7 +372,7 @@ process RunStrelkaBP {
 
   output:
   set val("Strelka"), idPatient, idSampleNormal, idSampleTumour,
-      file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaBPOutput
+      file("*.vcf.gz"), file("*.vcf.gz.tbi") into strelkaOutput
 
   when: !params.onlyQC
 
@@ -400,7 +400,7 @@ process RunStrelkaBP {
   """
 }
 
-if (params.verbose) strelkaBPOutput = strelkaBPOutput.view {
+if (params.verbose) strelkaOutput = strelkaOutput.view {
   "Variant Calling output:\n\
   Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
   File  : ${it[4].fileName}"
@@ -479,6 +479,8 @@ process RunCobalt {
   """
 }
 
+mantaOutput.into { mantaOutputForQC; mantaOutputForPurple }
+
 process RunPurple {
   label "purple"
 
@@ -489,7 +491,7 @@ process RunPurple {
   input:
   set idPatient, idSampleNormal, idSampleTumour, file(amberFiles) from amberOutput
   set idPatient, idSampleNormal, idSampleTumour, file(cobaltFiles) from cobaltOutput
-  set caller, idPatient, idSampleNormal, idSampleTumour, file(mantaVCF), file(mantaIndex) from mantaOutput
+  set caller, idPatient, idSampleNormal, idSampleTumour, file(mantaVCF), file(mantaIndex) from mantaOutputForPurple
   set file(genomeFasta), file(genomeIndex), file(genomeDict), file(purpleGC) from Channel.value([
       genomeFasta,
       genomeIndex,
@@ -524,81 +526,91 @@ process RunPurple {
   """
 }
 
-//(strelkaIndels, strelkaSNVS) = strelkaOutput.into(2)
-//(mantaSomaticSV, mantaDiploidSV) = mantaOutput.into(2)
-//
-//vcfForQC = Channel.empty().mix(
-//  vcfConcatenated.map {
-//    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
-//    [variantcaller, vcf]
-//  },
-//  mantaDiploidSV.map {
-//    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
-//    [variantcaller, vcf[2]]
-//  },
-//  mantaSomaticSV.map {
-//    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
-//    [variantcaller, vcf[3]]
-//  },
-//  singleMantaOutput.map {
-//    variantcaller, idPatient, idSample, vcf, tbi ->
-//    [variantcaller, vcf[2]]
-//  },
-//  strelkaIndels.map {
-//    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
-//    [variantcaller, vcf[0]]
-//  },
-//  strelkaSNVS.map {
-//    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
-//    [variantcaller, vcf[1]]
-//  })
-//
-//(vcfForBCFtools, vcfForVCFtools) = vcfForQC.into(2)
-//
-//process RunBcftoolsStats {
-//  tag {vcf}
-//
-//  publishDir "${params.outDir}/Reports/BCFToolsStats", mode: params.publishDirMode
-//
-//  input:
-//    set variantCaller, file(vcf) from vcfForBCFtools
-//
-//  output:
-//    file ("${vcf.simpleName}.bcf.tools.stats.out") into bcfReport
-//
-//  when: !params.noReports
-//
-//  script: QC.bcftools(vcf)
-//}
-//
-//if (params.verbose) bcfReport = bcfReport.view {
-//  "BCFTools stats report:\n\
-//  File  : [${it.fileName}]"
-//}
-//
+def vcfForQC = Channel.empty().mix(
+  vcfConcatenated.map {
+    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
+    [variantcaller, vcf]
+  },
+  mantaOutputForQC.map {
+    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
+    [variantcaller, vcf]
+  },
+  strelkaOutput.map {
+    variantcaller, idPatient, idSampleNormal, idSampleTumour, vcf, tbi ->
+    [variantcaller, vcf]
+  }
+)
+
+(vcfForBCFtools, vcfForVCFtools) = vcfForQC.into(2)
+
+process RunBcftoolsStats {
+  tag {vcf}
+
+  publishDir "${params.outDir}/Reports/BCFToolsStats", mode: params.publishDirMode
+
+  input:
+  set variantCaller, file(vcf) from vcfForBCFtools
+
+  output:
+  file ("${vcf.simpleName}.bcf.tools.stats.out") into bcfReport
+
+  when: !params.noReports
+
+  script:
+  """
+  bcftools stats ${vcf} > ${vcf.simpleName}.bcftools_stats.txt
+  """
+}
+
+if (params.verbose) bcfReport = bcfReport.view {
+  "BCFTools stats report:\n\
+  File  : [${it.fileName}]"
+}
+
 //bcfReport.close()
-//
-//process RunVcftools {
-//  tag {vcf}
-//
-//  publishDir "${params.outDir}/Reports/VCFTools", mode: params.publishDirMode
-//
-//  input:
-//    set variantCaller, file(vcf) from vcfForVCFtools
-//
-//  output:
-//    file ("${vcf.simpleName}.*") into vcfReport
-//
-//  when: !params.noReports
-//
-//  script: QC.vcftools(vcf)
-//}
-//
-//if (params.verbose) vcfReport = vcfReport.view {
-//  "VCFTools stats report:\n\
-//  File  : [${it.fileName}]"
-//}
-//
+
+process RunVcftools {
+  tag {vcf}
+
+  publishDir "${params.outDir}/Reports/VCFTools", mode: params.publishDirMode
+
+  input:
+  set variantCaller, file(vcf) from vcfForVCFtools
+
+  output:
+  file ("${vcf.simpleName}.*") into vcfReport
+
+  when: !params.noReports
+
+  script:
+  """
+  vcftools \
+  --gzvcf ${vcf} \
+  --relatedness2 \
+  --out ${vcf.simpleName}
+
+  vcftools \
+  --gzvcf ${vcf} \
+  --TsTv-by-count \
+  --out ${vcf.simpleName}
+
+  vcftools \
+  --gzvcf ${vcf} \
+  --TsTv-by-qual \
+  --out ${vcf.simpleName}
+
+  vcftools \
+  --gzvcf ${vcf} \
+  --FILTER-summary \
+  --out ${vcf.simpleName}
+  """
+}
+
+if (params.verbose) vcfReport = vcfReport.view {
+  "VCFTools stats report:\n\
+  File  : [${it.fileName}]"
+}
+
 //vcfReport.close()
 
 /*
