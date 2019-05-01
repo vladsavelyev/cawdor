@@ -7,10 +7,15 @@ genomeIndex = Utils.findRefFile(params, 'genomeIndex')
 genomeDict  = Utils.findRefFile(params, 'genomeDict')
 purpleHet   = Utils.findRefFile(params, 'purpleHet')
 purpleGC    = Utils.findRefFile(params, 'purpleGC')
-dbsnp       = Utils.findRefFile(params, 'dbsnp')
 intervals   = Utils.findRefFile(params, 'intervals')
-if (![genomeFasta, genomeIndex, genomeDict, dbsnp, intervals].every())
+if (![genomeFasta, genomeIndex, genomeDict, intervals].every())
   exit 1, "Missing reference files for alignment. See --help for more information"
+
+// Check for awsbatch profile configuration
+// make sure queue is defined
+if (workflow.profile == 'awsbatch') {
+  if (!params.awsqueue) exit 1, "Provide the job queue for aws batch!"
+}
 
 // Set up the bamFiles channel
 if (params.containsKey("samples")) {
@@ -27,7 +32,7 @@ if (params.containsKey("samples")) {
 inputData = Utils.extractBams(file(tsvFile))
 inputChannel = Channel.from(inputData)
 
-minimalInformationMessage()
+Utils.startMessage(log, workflow, config, params)
 
 /*
 ================================================================================
@@ -203,7 +208,7 @@ process RunVarDict {
   script:
   tmpDir = file("tmp").mkdir()
   outFile = "${idPatient}-interval_${intervalBed.baseName}.vcf.gz"
-  """ \
+  """
   unset JAVA_HOME && \
   export VAR_DICT_OPTS='-Xms750m -Xmx${task.memory.toGiga()}g -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir}' && \
   vardict-java -G ${genomeFasta} \
@@ -230,33 +235,6 @@ process RunVarDict {
 }
 
 vardictOutput = vardictOutput.groupTuple(by:[0,1,2,3])
-
-//process RunVarDictGermline {
-//  when: false
-//
-//  script:
-//  tmpDir = file("tmp").mkdir()
-//  """ \
-//  unset JAVA_HOME && \
-//  export VAR_DICT_OPTS='-Xms750m -Xmx3000m -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir} && \
-//  vardict-java -G ${genomeFasta} \
-//  -N ${idSampleNormal} \
-//  -b ${bamNormal} \
-//  -c 1 -S 2 -E 3 -g 4 --nosv --deldupvar -Q 10 -F 0x700 -f 0.1 \
-//  ${intervalBed} \
-//  | teststrandbias.R \
-//  | var2vcf_valid.pl -A -N ${idSampleNormal} -E -f 0.1
-//  | bcftools filter -i 'QUAL >= 0' \
-//  | bcftools filter --soft-filter 'LowFreqBias' --mode '+' -e 'FORMAT/AF[0] < 0.02 && FORMAT/VD[0] < 30 \
-//  && INFO/SBF < 0.1 && INFO/NM >= 2.0' \
-//  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$4) } {print}' \
-//  | awk -F\$'\t' -v OFS='\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
-//  | awk -F\$'\t' -v OFS='\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
-//  | vcfstreamsort \
-//  | bgzip -c > ${vardictOutput} \
-//  """
-//}
-
 
 // we are merging the VCFs that are called separately for different intervals
 // so we can have a single sorted VCF containing all the calls for a given caller
@@ -290,7 +268,7 @@ process ConcatVCFbyInterval {
 }
 
 if (params.verbose) vcfConcatenated = vcfConcatenated.view {
-  "Variant Calling output:\n\
+  "Variant calling output:\n\
   Tool  : ${it[0]}\tID    : ${it[1]}\tSample: [${it[3]}, ${it[2]}]\n\
   File  : ${it[4].fileName}"
 }
@@ -310,7 +288,7 @@ process RunManta {
   ])
 
   output:
-  set val("Manta"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into mantaOutput
+  set val("manta"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into mantaOutput
   set idPatient, idSampleNormal, idSampleTumour, \
       file("Manta/results/variants/candidateSmallIndels.vcf.gz"), \
       file("Manta/results/variants/candidateSmallIndels.vcf.gz.tbi") into mantaToStrelka
@@ -355,7 +333,7 @@ bamsForStrelkaBP = bamsForStrelkaBP.map {
   [idPatientNormal, idSampleNormal, bamNormal, baiNormal, idSampleTumour, bamTumour, baiTumour, mantaCSI, mantaCSIi]
 }
 
-process RunStrelkaBP {
+process RunStrelka {
   tag {idSampleTumour + "_vs_" + idSampleNormal}
 
   publishDir "${params.outDir}/VariantCalling/${idPatient}/Strelka", mode: params.publishDirMode
@@ -382,7 +360,7 @@ process RunStrelkaBP {
       ""
   options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
   outputFile = "${idPatient}-strelka.vcf.gz"
-  """ \
+  """ 
   ${targetsCmd}
   configureStrelkaSomaticWorkflow.py \
   --tumor ${bamTumour} \
@@ -613,9 +591,9 @@ if (params.verbose) vcfReport = vcfReport.view {
 
 def helpMessage() {
   // Display help message
-  log.info "UMCCR Cancer Analysis Workflow"
+  Utils.cawdorMsg(log)
   log.info "    Usage:"
-  log.info "       nextflow run variants.nf --sample <file.tsv> --genome <Genome>"
+  log.info "       nextflow run somatic.nf --samples <file.tsv> --outDir <Dir> --genome <Genome>"
   log.info ""
   log.info "    --outDir <Directory>"
   log.info "       Output directory. Can be the output from align.nf subworkflow, "
@@ -640,44 +618,13 @@ def helpMessage() {
   log.info "       Adds more verbosity to workflow"
 }
 
-def minimalInformationMessage() {
-  // Minimal information message
-  log.info "Command line: " + workflow.commandLine
-  log.info "Profile     : " + workflow.profile
-  log.info "Project dir : " + workflow.projectDir
-  log.info "Launch dir  : " + workflow.launchDir
-  log.info "Work dir    : " + workflow.workDir
-  log.info "Executor    : " + config.process.executor
-  log.info "Out dir     : " + params.outDir
-  log.info "Input path  : " + tsvFile
-  log.info "Genome      : " + params.genome
-  log.info "Genomes dir : " + params.genomes_base
-  log.info "Target BED  : " + params.targetBED
-  log.info "Containers"
-  if (params.containsKey("repository"))
-    log.info "  Repository   : " + params.repository
-  if (params.containsKey("containerPath"))
-    log.info "  ContainerPath: " + params.containerPath
-  if (params.containsKey("tag"))
-    log.info "  Tag          : " + params.tag
-  log.info "Reference files used:"
-  log.info "  fasta       :\n\t" + genomeFasta
-  log.info "  dbsnp       :\n\t" + dbsnp
-  log.info "  intervals   :\n\t" + intervals
-}
-
 workflow.onComplete {
-  // Display complete message
-  this.minimalInformationMessage()
-  log.info "Completed at: " + workflow.complete
-  log.info "Duration    : " + workflow.duration
-  log.info "Success     : " + workflow.success
-  log.info "Exit status : " + workflow.exitStatus
-  log.info "Error report: " + (workflow.errorReport ?: '-')
+  Utils.endMessage(log, workflow, config, params)
 }
 
 workflow.onError {
   // Display error message
+  Utils.nextflowMessage(log, workflow)
   log.info "Workflow execution stopped with the following message:"
   log.info "  " + workflow.errorMessage
 }

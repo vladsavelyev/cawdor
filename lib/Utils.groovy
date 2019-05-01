@@ -251,5 +251,43 @@ class Utils {
     [fcid, lane]
   }
 
-}
+  static def cawdorMsg(log) {
+    log.info "Cawdor - UMCCR cancer analysis workflow for DNA and RNA WGS sequencing data"
+  }
 
+  static def nextflowMessage(log, workflow) {
+    // Nextflow message (version + build)
+    log.info "N E X T F L O W  ~  version ${workflow.nextflow.version} ${workflow.nextflow.build}"
+  }
+
+  static def startMessage(log, workflow, config, params) {
+    // Minimal information message
+    log.info "Command line: " + workflow.commandLine
+    log.info "Profile     : " + workflow.profile
+    log.info "Project dir : " + workflow.projectDir
+    log.info "Launch dir  : " + workflow.launchDir
+    log.info "Work dir    : " + workflow.workDir
+    log.info "Cont engine : " + workflow.containerEngine
+    log.info "Executor    : " + config.process.executor
+    log.info "Out dir     : " + params.outDir
+    log.info "Genome      : " + params.genome
+    log.info "Genomes dir : " + params.genomes_base
+    log.info "Target BED  : " + params.targetBED
+    log.info "Containers"
+    if (params.containsKey("repository"))
+      log.info "  Repository   : " + params.repository
+    if (params.containsKey("containerPath"))
+      log.info "  ContainerPath: " + params.containerPath
+    if (params.containsKey("tag"))
+      log.info "  Tag          : " + params.tag
+  }
+
+  static def endMessage(log, workflow, config, params) {
+    startMessage(log, workflow, config, params)
+    log.info "Completed at: " + workflow.complete
+    log.info "Duration    : " + workflow.duration
+    log.info "Success     : " + workflow.success
+    log.info "Exit status : " + workflow.exitStatus
+    log.info "Error report: " + (workflow.errorReport ?: '-')
+  }
+}

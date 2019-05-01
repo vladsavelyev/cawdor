@@ -39,8 +39,7 @@ if (params.containsKey("samples")) {
   exit 1, 'No samples were defined with either --samples input.tsv or --samplesDir /input_dir, see --help'
 }
 
-
-minimalInformationMessage()
+Utils.startMessage(log, workflow, config, params)
 
 /*
 ================================================================================
@@ -267,17 +266,22 @@ if (params.verbose) samtoolsStatsReport = samtoolsStatsReport.view {
   File  : [${it.fileName}]"
 }
 
+/*
+================================================================================
+=                               F U N C T I O N S                              =
+================================================================================
+*/
 
 def helpMessage() {
   // Display help message
-  log.info "UMCCR Cancer Analysis Workflow"
+  Utils.cawdorMsg(log)
   log.info "    Usage:"
-  log.info "       nextflow run main.nf --sample <file.tsv> --genome <Genome>"
-  log.info "       nextflow run main.nf --sampleDir <Directory> --genome <Genome>"
+  log.info "       nextflow run align.nf --samples <file.tsv> --outDir <Dir> --genome <Genome>"
+  log.info "       nextflow run align.nf --samplesDir <Directory> --outDIr <Dir> --genome <Genome>"
   log.info ""
-  log.info "    --sample <file.tsv>"
+  log.info "    --samples <file.tsv>"
   log.info "       Specify a TSV file containing paths to sample files."
-  log.info "    --sampleDir <Directoy>"
+  log.info "    --samplesDir <Directoy>"
   log.info "       Specify a directory containing sample files."
   log.info "    --test"
   log.info "       Use a test sample."
@@ -295,43 +299,13 @@ def helpMessage() {
   log.info "       Adds more verbosity to workflow"
 }
 
-def minimalInformationMessage() {
-  // Minimal information message
-  log.info "Command line: " + workflow.commandLine
-  log.info "Profile     : " + workflow.profile
-  log.info "Project dir : " + workflow.projectDir
-  log.info "Launch dir  : " + workflow.launchDir
-  log.info "Work dir    : " + workflow.workDir
-  log.info "Cont Engine : " + workflow.containerEngine
-  log.info "Executor    : " + config.process.executor
-  log.info "Out dir     : " + params.outDir
-//  log.info "Input path  : " + inputPath
-  log.info "Genome      : " + params.genome
-  log.info "Genomes dir : " + params.genomes_base
-  log.info "Containers"
-  if (params.containsKey("repository"))
-    log.info "  Repository   : " + params.repository
-  if (params.containsKey("containerPath"))
-    log.info "  ContainerPath: " + params.containerPath
-  if (params.containsKey("tag"))
-    log.info "  Tag          : " + params.tag
-  log.info "Reference files used:"
-  log.info "  fasta       :\n\t" + genomeFasta
-  log.info "  bwa indexes :\n\t" + bwaIndex.join(',\n\t')
-}
-
 workflow.onComplete {
-  // Display complete message
-  this.minimalInformationMessage()
-  log.info "Completed at: " + workflow.complete
-  log.info "Duration    : " + workflow.duration
-  log.info "Success     : " + workflow.success
-  log.info "Exit status : " + workflow.exitStatus
-  log.info "Error report: " + (workflow.errorReport ?: '-')
+  Utils.endMessage(log, workflow, config, params)
 }
 
 workflow.onError {
   // Display error message
+  Utils.nextflowMessage(log, workflow)
   log.info "Workflow execution stopped with the following message:"
   log.info "  " + workflow.errorMessage
 }

@@ -1,6 +1,11 @@
+#!/usr/bin/env nextflow
 
-line = "8414746.r-man2  vs2870   express- exp16m100   10956   1  16  100gb 24:00 R 19:50"
-group = (line =~ /(\S+)\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\S+).*/)[1]
-println(group[0])
-println(group[1])
+if (params.help) exit 0, helpMessage()
 
+genomeFasta = Utils.findRefFile(params, 'genomeFasta')
+genomeIndex = Utils.findRefFile(params, 'genomeIndex')
+genomeDict  = Utils.findRefFile(params, 'genomeDict')
+purpleHet   = Utils.findRefFile(params, 'purpleHet')
+purpleGC    = Utils.findRefFile(params, 'purpleGC')
+dbsnp       = Utils.findRefFile(params, 'dbsnp')
+intervals   = Utils.findRefFile(params, 'intervals')
