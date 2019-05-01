@@ -119,9 +119,9 @@ inputChannel.into { bamsForManta; bamsForStrelkaBP; bamsForCobalt; bamsForAmber;
 bamsByIntervals = bamsForIntervals.combine(intervalBeds)  // cartesian product of 2 channels
 bamsByIntervals.into { bamsForMutect; bamsForVardict }
 
-// This will give as a list of unfiltered calls for MuTect.
+// This will give as a list of unfiltered calls for Mutect.
 process RunMutect {
-  tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
+  tag {idPatient + "-mutect-" + intervalBed.baseName}
 
   input:
   set idPatient, idSampleNormal, file(bamNormal), file(baiNormal),
@@ -130,12 +130,13 @@ process RunMutect {
       genomeFasta, genomeIndex, genomeDict])
 
   output:
-  set val("MuTect"), idPatient, idSampleNormal, idSampleTumour,
-      file("${idPatient}-${intervalBed.baseName}.vcf") into mutectOutput
+  set val("mutect"), idPatient, idSampleNormal, idSampleTumour,
+      file("*.vcf.gz"), file("*.vcf.gz.tbi") into mutectOutput
 
   when: !params.onlyQC
 
   script:
+  outFile = "${idPatient}-interval_${intervalBed.baseName}.vcf.gz"
   """ \
   gatk --java-options "-Xmx${task.memory.toGiga()}g" \
   Mutect2 \
@@ -143,7 +144,7 @@ process RunMutect {
   -I ${bamTumour}  -tumor ${idSampleTumour} \
   -I ${bamNormal} -normal ${idSampleNormal} \
   -L ${intervalBed} \
-  -O ${idPatient}-${intervalBed.baseName}.vcf \
+  -O ${outFile} \
   """
 }
 
@@ -185,7 +186,7 @@ mutectOutput = mutectOutput.groupTuple(by:[0,1,2,3])  // group by normals
 //freebayesOutput = freebayesOutput.groupTuple(by:[0,1,2,3])
 
 process RunVarDict {
-  tag {idPatient + "-" + variantCaller + "-" + intervalBed.baseName}
+  tag {idPatient + "-vardict-" + intervalBed.baseName}
 
   input:
   set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour),
@@ -194,12 +195,14 @@ process RunVarDict {
   file(genomeIndex) from Channel.value(genomeIndex)
 
   output:
-  set val("VarDict"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf") into vardictOutput
+  set val("vardict"), idPatient, idSampleNormal, idSampleTumour,
+      file("*.vcf.gz"), file("*.vcf.gz.tbi") into vardictOutput
 
   when: !params.onlyQC
 
   script:
   tmpDir = file("tmp").mkdir()
+  outFile = "${idPatient}-interval_${intervalBed.baseName}.vcf.gz"
   """ \
   unset JAVA_HOME && \
   export VAR_DICT_OPTS='-Xms750m -Xmx${task.memory.toGiga()}g -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir}' && \
@@ -222,7 +225,7 @@ process RunVarDict {
   | awk -F\$'\\t' -v OFS='\\t' '{if (\$0 !~ /^#/) gsub(/[KMRYSWBVHDXkmryswbvhdx]/, "N", \$5) } {print}' \
   | awk -F\$'\\t' -v OFS='\\t' '\$1!~/^#/ && \$4 == \$5 {next} {print}' \
   | vcfstreamsort \
-  > "${idPatient}-${intervalBed.baseName}.vcf" \
+  | bgzip -c > ${outFile} && tabix -p vcf ${outFile} \
   """
 }
 
@@ -269,22 +272,20 @@ process ConcatVCFbyInterval {
   publishDir "${params.outDir}/VariantCalling/${idPatient}/${"$variantCaller"}", mode: params.publishDirMode
 
   input:
-  set variantCaller, idPatient, idSampleNormal, idSampleTumour, file(vcFiles) from vcfsToConcat
-  file(genomeIndex) from Channel.value(genomeIndex)
-  file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
+  set variantCaller, idPatient, idSampleNormal, idSampleTumour,
+      file(vcfFiles), file(tbiFiles) from vcfsToConcat
 
   output:
   set variantCaller, idPatient, idSampleNormal, idSampleTumour,
-          file("${idPatient}-${variantCaller}.vcf.gz"),
-          file("${idPatient}-${variantCaller}.vcf.gz.tbi") into vcfConcatenated
+      file("*-${variantCaller}.vcf.gz{,.tbi}") into vcfConcatenated
 
   when: !params.onlyQC
 
   script:
-  outputFile = "${idPatient}-${variantCaller}.vcf"  // will add .gz and .gz.tbi automatically
-  options = params.targetBED ? "-t ${targetBED}" : ""
+  outFile = "${idPatient}-${variantCaller}.vcf.gz"  // will add .gz and .gz.tbi automatically
   """
-  concatenateVCFs.sh -i ${genomeIndex} -c ${task.cpus} -o ${outputFile} ${options}
+  bcftools concat ${idPatient}-interval_*.vcf.gz -a | bcftools sort -Oz -o ${outFile}
+  tabix -p vcf ${outFile}
   """
 }
 
