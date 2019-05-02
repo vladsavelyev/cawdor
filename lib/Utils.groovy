@@ -272,14 +272,6 @@ class Utils {
     log.info "Out dir     : " + params.outDir
     log.info "Genome      : " + params.genome
     log.info "Genomes dir : " + params.genomes_base
-    log.info "Target BED  : " + params.targetBED
-    log.info "Containers"
-    if (params.containsKey("repository"))
-      log.info "  Repository   : " + params.repository
-    if (params.containsKey("containerPath"))
-      log.info "  ContainerPath: " + params.containerPath
-    if (params.containsKey("tag"))
-      log.info "  Tag          : " + params.tag
   }
 
   static def endMessage(log, workflow, config, params) {

@@ -8,6 +8,7 @@ genomeDict  = Utils.findRefFile(params, 'genomeDict')
 purpleHet   = Utils.findRefFile(params, 'purpleHet')
 purpleGC    = Utils.findRefFile(params, 'purpleGC')
 intervals   = Utils.findRefFile(params, 'intervals')
+callable    = Utils.findRefFile(params, 'callable')
 if (![genomeFasta, genomeIndex, genomeDict, intervals].every())
   exit 1, "Missing reference files for alignment. See --help for more information"
 
@@ -33,6 +34,7 @@ inputData = Utils.extractBams(file(tsvFile))
 inputChannel = Channel.from(inputData)
 
 Utils.startMessage(log, workflow, config, params)
+log.info "Callable    : " + callable
 
 /*
 ================================================================================
@@ -133,6 +135,7 @@ process RunMutect {
       idSampleTumour, file(bamTumour), file(baiTumour), file(intervalBed) from bamsForMutect
   set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
       genomeFasta, genomeIndex, genomeDict])
+  file(callable) from Channel.value(callable ? file(callable) : "null")
 
   output:
   set val("mutect"), idPatient, idSampleNormal, idSampleTumour,
@@ -141,14 +144,21 @@ process RunMutect {
   when: !params.strelkaOnly && !params.onlyQC
 
   script:
+  def makeTarget = ""
+  def targetBed = intervalBed
+  if (callable) {
+    targetBed = 'target.bed'
+    makeTarget = "bedtools intersect -a ${intervalBed} -b ${callable} > ${targetBed}"
+  }
   outFile = "${idPatient}-interval_${intervalBed.baseName}.vcf.gz"
-  """ \
+  """
+  ${makeTarget}
   gatk --java-options "-Xmx${task.memory.toGiga()}g" \
   Mutect2 \
   -R ${genomeFasta}\
   -I ${bamTumour}  -tumor ${idSampleTumour} \
   -I ${bamNormal} -normal ${idSampleNormal} \
-  -L ${intervalBed} \
+  -L ${targetBed} \
   -O ${outFile} \
   """
 }
@@ -198,6 +208,7 @@ process RunVarDict {
     file(baiTumour), file(intervalBed) from bamsForVardict
   file(genomeFasta) from Channel.value(genomeFasta)
   file(genomeIndex) from Channel.value(genomeIndex)
+  file(callable) from Channel.value(callable ? file(callable) : "null")
 
   output:
   set val("vardict"), idPatient, idSampleNormal, idSampleTumour,
@@ -206,16 +217,23 @@ process RunVarDict {
   when: !params.strelkaOnly && !params.onlyQC
 
   script:
+  def makeTarget = ""
+  def targetBed = intervalBed
+  if (callable) {
+    targetBed = 'target.bed'
+    makeTarget = "bedtools intersect -a ${intervalBed} -b ${callable} > ${targetBed}"
+  }
   tmpDir = file("tmp").mkdir()
   outFile = "${idPatient}-interval_${intervalBed.baseName}.vcf.gz"
   """
+  ${makeTarget}
   unset JAVA_HOME && \
   export VAR_DICT_OPTS='-Xms750m -Xmx${task.memory.toGiga()}g -XX:+UseSerialGC -Djava.io.tmpdir=${tmpDir}' && \
   vardict-java -G ${genomeFasta} \
   -N ${idSampleNormal} \
   -b "${bamTumour}|${bamNormal}" \
   -c 1 -S 2 -E 3 -g 4 --nosv --deldupvar -Q 10 -F 0x700 -f 0.1 \
-  ${intervalBed} \
+  ${targetBed} \
   | awk 'NF>=48' \
   | testsomatic.R \
   | var2vcf_paired.pl -P 0.9 -m 4.25 -f 0.01 -M  -N "${idSampleTumour}|${idSampleNormal}" \
@@ -281,11 +299,7 @@ process RunManta {
   input:
   set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour),
     file(baiTumour) from bamsForManta
-  file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
-  set file(genomeFasta), file(genomeIndex) from Channel.value([
-    genomeFasta,
-    genomeIndex
-  ])
+  set file(genomeFasta), file(genomeIndex) from Channel.value([genomeFasta, genomeIndex])
 
   output:
   set val("manta"), idPatient, idSampleNormal, idSampleTumour, file("*.vcf.gz"), file("*.vcf.gz.tbi") into mantaOutput
@@ -296,18 +310,12 @@ process RunManta {
   when: !params.onlyQC
 
   script:
-  targetCmd = params.targetBED ?
-      "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" :
-      ""
-  options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
   outputFile = "${idPatient}-manta.vcf.gz"
   """ \
-  ${targetCmd} \
   configManta.py \
   --normalBam ${bamNormal} \
   --tumorBam ${bamTumour} \
   --reference ${genomeFasta} \
-  ${options} \
   --runDir Manta
 
   python Manta/runWorkflow.py -m local -j ${task.cpus}
@@ -341,7 +349,6 @@ process RunStrelka {
   input:
   set idPatient, idSampleNormal, file(bamNormal), file(baiNormal), idSampleTumour, file(bamTumour), file(baiTumour),
       file(mantaCSI), file(mantaCSIi) from bamsForStrelkaBP
-  file(targetBED) from Channel.value(params.targetBED ? file(params.targetBED) : "null")
   set file(genomeFasta), file(genomeIndex), file(genomeDict) from Channel.value([
     genomeFasta,
     genomeIndex,
@@ -355,19 +362,13 @@ process RunStrelka {
   when: !params.onlyQC
 
   script:
-  targetsCmd = params.targetBED ?
-      "bgzip --threads ${task.cpus} -c ${targetBED} > call_targets.bed.gz ; tabix call_targets.bed.gz" :
-      ""
-  options = params.targetBED ? "--exome --callRegions call_targets.bed.gz" : ""
   outputFile = "${idPatient}-strelka.vcf.gz"
   """ 
-  ${targetsCmd}
   configureStrelkaSomaticWorkflow.py \
   --tumor ${bamTumour} \
   --normal ${bamNormal} \
   --referenceFasta ${genomeFasta} \
   --indelCandidates ${mantaCSI} \
-  ${options} \
   --runDir Strelka
 
   python Strelka/runWorkflow.py -m local -j ${task.cpus}

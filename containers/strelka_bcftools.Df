@@ -1,6 +1,4 @@
 FROM biocontainers/biocontainers:v1.0.0_cv4
 
-# FROM quay.io/biocontainers/strelka:2.9.10--0
-
 RUN conda install strelka bcftools tabix
 WORKDIR /data/
