@@ -206,7 +206,7 @@ class Utils {
     List res = []
     List dirs = [file(pattern, type: "dir")].flatten()
     dirs.each {
-      for (path1 in file("${it}/**_R1*.fastq.gz")) {
+      for (path1 in file("${it}/**_R1*.{fq,fastq}.gz")) {
         assert path1.getName().contains('_R1')
         def path2 = file(path1.toString().replace('_R1', '_R2'))
         if (!path2.exists()) error "Path '${path2}' not found"
@@ -260,22 +260,23 @@ class Utils {
     log.info "N E X T F L O W  ~  version ${workflow.nextflow.version} ${workflow.nextflow.build}"
   }
 
-  static def startMessage(log, workflow, config, params) {
+  static def startMessage(log, workflow, config, params, inputPath) {
     // Minimal information message
     log.info "Command line: " + workflow.commandLine
     log.info "Profile     : " + workflow.profile
     log.info "Project dir : " + workflow.projectDir
     log.info "Launch dir  : " + workflow.launchDir
     log.info "Work dir    : " + workflow.workDir
+    log.info "Out dir     : " + params.outDir
+    log.info "Input path  : " + inputPath
     log.info "Cont engine : " + workflow.containerEngine
     log.info "Executor    : " + config.process.executor
-    log.info "Out dir     : " + params.outDir
     log.info "Genome      : " + params.genome
     log.info "Genomes dir : " + params.genomes_base
   }
 
-  static def endMessage(log, workflow, config, params) {
-    startMessage(log, workflow, config, params)
+  static def endMessage(log, workflow, config, params, inputPath) {
+    startMessage(log, workflow, config, params, inputPath)
     log.info "Completed at: " + workflow.complete
     log.info "Duration    : " + workflow.duration
     log.info "Success     : " + workflow.success
