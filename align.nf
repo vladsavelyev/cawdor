@@ -39,7 +39,7 @@ if (params.containsKey("samples")) {
   exit 1, 'No samples were defined with either --samples input.tsv or --samplesDir /input_dir, see --help'
 }
 
-Utils.startMessage(log, workflow, config, params)
+Utils.startMessage(log, workflow, config, params, inputPath)
 
 /*
 ================================================================================
@@ -62,10 +62,10 @@ process RunFastQC {
   publishDir "${params.outDir}/Reports/FastQC/${idLane}", mode: params.publishDirMode
 
   input:
-    set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputFilesforFastQC
+  set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputFilesforFastQC
 
   output:
-    file "*_fastqc.{zip,html}" into fastQCreport
+  file "*_fastqc.{zip,html}" into fastQCreport
 
   script:
   def inputs = Utils.isFq(inputFile1) ? "${inputFile1} ${inputFile2}" : "${inputFile1}"
@@ -83,11 +83,11 @@ process MapReads {
   tag {idPatient + "-" + idLane}
 
   input:
-    set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputChannel
-    set file(genomeFasta), file(bwaIndex) from Channel.value([genomeFasta, bwaIndex])
+  set idPatient, status, idSample, idLane, file(inputFile1), file(inputFile2) from inputChannel
+  set file(genomeFasta), file(bwaIndex) from Channel.value([genomeFasta, bwaIndex])
 
   output:
-    set idPatient, status, idSample, idLane, file("${idLane}.bam") into mappedBam
+  set idPatient, status, idSample, idLane, file("${idLane}.bam") into mappedBam
 
   when: !params.onlyQC
 
@@ -136,10 +136,10 @@ process MergeBams {
   tag {idPatient + "-" + idSample}
 
   input:
-    set idPatient, status, idSample, idLane, file(bam) from groupedBam
+  set idPatient, status, idSample, idLane, file(bam) from groupedBam
 
   output:
-    set idPatient, status, idSample, file("${idSample}.bam") into mergedBam
+  set idPatient, status, idSample, file("${idSample}.bam") into mergedBam
 
   when: !params.onlyQC
 
@@ -179,12 +179,12 @@ process MarkDuplicates {
     }
 
   input:
-    set idPatient, status, idSample, file("${idSample}.bam") from mergedBam
+  set idPatient, status, idSample, file("${idSample}.bam") from mergedBam
 
   output:
-    set idPatient, idSample, file("${idSample}.dedup.bam"), file("${idSample}.dedup.bai") into duplicateMarkedBams
-    set idPatient, status, idSample, val("${idSample}.dedup.bam"), val("${idSample}.dedup.bai") into samplesTsv
-    file ("${idSample}.dedup_metrics.txt") into markDuplicatesReport
+  set idPatient, idSample, file("${idSample}.dedup.bam"), file("${idSample}.dedup.bai") into duplicateMarkedBams
+  set idPatient, status, idSample, val("${idSample}.dedup.bam"), val("${idSample}.dedup.bai") into samplesTsv
+  file ("${idSample}.dedup_metrics.txt") into markDuplicatesReport
 
   when: !params.onlyQC
 
@@ -250,10 +250,10 @@ process RunSamtoolsStats {
   publishDir "${params.outDir}/Reports/SamToolsStats", mode: params.publishDirMode
 
   input:
-    set idPatient, idSample, file(bam), file(bai) from bamForSamToolsStats
+  set idPatient, idSample, file(bam), file(bai) from bamForSamToolsStats
 
   output:
-    file ("${bam}.stats.txt") into samtoolsStatsReport
+  file ("${bam}.stats.txt") into samtoolsStatsReport
 
   script:
   """ \
@@ -300,7 +300,7 @@ def helpMessage() {
 }
 
 workflow.onComplete {
-  Utils.endMessage(log, workflow, config, params)
+  Utils.endMessage(log, workflow, config, params, inputPath)
 }
 
 workflow.onError {

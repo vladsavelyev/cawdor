@@ -33,7 +33,7 @@ if (params.containsKey("samples")) {
 inputData = Utils.extractBams(file(tsvFile))
 inputChannel = Channel.from(inputData)
 
-Utils.startMessage(log, workflow, config, params)
+Utils.startMessage(log, workflow, config, params, tsvFile)
 log.info "Callable    : " + callable
 
 /*
@@ -620,7 +620,7 @@ def helpMessage() {
 }
 
 workflow.onComplete {
-  Utils.endMessage(log, workflow, config, params)
+  Utils.endMessage(log, workflow, config, params, tsvFile)
 }
 
 workflow.onError {

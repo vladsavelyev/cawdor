@@ -35,7 +35,7 @@ inputChannel = inputChannel.map {
     [idSampleNormal, bamNormal, baiNormal]
 }
 
-Utils.startMessage(log, workflow, config, params)
+Utils.startMessage(log, workflow, config, params, tsvFile)
 
 /*
 ================================================================================
@@ -447,7 +447,7 @@ def helpMessage() {
 }
 
 workflow.onComplete {
-  Utils.endMessage(log, workflow, config, params)
+  Utils.endMessage(log, workflow, config, params, tsvFile)
 }
 
 workflow.onError {
