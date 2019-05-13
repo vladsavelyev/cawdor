@@ -1,0 +1,16 @@
+name: cawdor
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  - nextflow
+  - bwa
+  - samtools
+  - python <3        # NGSCheckMate
+  - perl             # NGSCheckMate/patterngenerator/makesnvpattern.pl
+  - bowtie           # NGSCheckMate/patterngenerator/makesnvpattern.pl
+  - gatk4 >=4.1.0.0  # Conpair
+  - scipy            # Conpair

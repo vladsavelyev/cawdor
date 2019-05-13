@@ -10,15 +10,24 @@ List fastqs = []
 inputPath.eachLine { line ->
   List row = line.split(/\t/)
   sname = row[0]
-  folder = row[1]
-  if (folder == "notfound" || !folder) return
-  println "Looking at folder ${folder}/*_R1*.*"
-  def found = file("${folder}/*_R1*.*")
-  assert found.size() == 1, "R1 files in ${folder}: ${found}"
-  println "   found ${found[0]}"
-  fastqs << [sname, found[0]]
+  path = row[1]
+  if (path == "notfound" || !path) return
+  if (file(path).isFile()) {
+    println "Found file ${path}"
+    fastqs << [sname, file1]
+  } else if (file(path).isDirectory()) {
+    println "Looking at folder ${path}"
+    def found = file("${path}/*_R1*.*")
+    if (found.size() > 0)
+    assert found.size() == 1, "R1 files in ${path}: ${found}"
+    def file1 = found[0]
+    println "   found ${file1}"
+    fastqs << [sname, file1]
+  }
 }
 def inputChannel = Channel.from(fastqs)
+
+if (!params.targetDepth) params.targetDepth = 4
 
 Utils.startMessage(log, workflow, config, params, inputPath)
 
@@ -48,60 +57,66 @@ if (params.verbose) inputChannel = inputChannel.view {
 //  "Files to downsample: ${it}"
 //}
 
-def targDepth = 4
-def gSize = 3_234_830_000
-def readLength = 150
-def readsNum = Math.round((gSize / readLength) * targDepth)
-if (params.verbose)
-  println "Downsampling to ${readsNum} reads, which is ${readsNum * 4} lines (unless the file is smaller)"
+if (params.targetDepth > 0) {
+  def targDepth = params.targetDepth
+  def gSize = 3_234_830_000
+  def readLength = 150
+  def readsNum = Math.round((gSize / readLength) * targDepth)
+  if (params.verbose) {
+    println "Downsampling to ${readsNum} reads, which is ${readsNum * 4} lines (unless the file is smaller)"
+  }
 
-process DownsampleFastq {
-  tag {sname}
+  process DownsampleFastq {
+    tag {sname}
 
-  input:
-  set sname, file(file1) from inputChannel
+    validExitStatus 0,141
 
-  output:
-  set sname, file("*.ds.fq") into downsampledFastq
+    input:
+    set sname, file(file1) from inputChannel
 
-  script:
-  """
-  gunzip -c ${file1} | head -n${readsNum * 4} > ${sname}.ds.fq
-  """
+    output:
+    set sname, file("*.ds.fq") into downsampledFastq
+
+    script:
+    """
+    gunzip -c ${file1} | head -n${readsNum * 4} > ${sname}.ds.fq
+    """
+  }
+  if (params.verbose) downsampledFastq = downsampledFastq.view {
+    "Downsampled: ${it}"
+  }
+
+  inputChannel = downsampledFastq
 }
 
-if (params.verbose) downsampledFastq = downsampledFastq.view {
-  "Downsampled: ${it}"
-}
-
-process RunNGSCheckMateFastq {
+process RunNcmFastq {
   tag {sname}
 
   publishDir "${params.outDir}", mode: 'link'
 
   input:
-  set sname, file(fastq) from downsampledFastq
+  set sname, file(file1) from inputChannel
   file ptfile from Channel.value(file(params.ptfile))
 
   output:
-  file "*.ncm" into ngsCheckMateFastq
+  file "*.ncm" into ncmFastq
 
   script:
   assert ptfile.name.endsWith(".pt")
   """
   ngscheckmate_fastq \
-  -1 ${fastq} \
+  -1 ${file1} \
   ${ptfile} \
   -p ${task.cpus} \
   > ${sname}.ncm
   """
 }
 
-if (params.verbose) ngsCheckMateFastq = ngsCheckMateFastq.view {
+if (params.verbose) ncmFastq = ncmFastq.view {
   "NCM files: ${it}"
 }
 
-def ncmFiles = ngsCheckMateFastq.toList()
+def ncmFiles = ncmFastq.toList()
 
 process RunNcnVaf {
 
@@ -136,16 +151,12 @@ def helpMessage() {
   log.info ""
   log.info "    --fastqs <file.tsv>"
   log.info "       Specify a TSV file in form of sampleId\\tfolderWithFastqs"
-  log.info "    --ptfile <path.pt>"
-  log.info "       NGSCheckMate SNPs PT file"
+  log.info "    --targetDepth N"
+  log.info "       depth to downsample the fastq file (default 4. Set to -1 to skip)"
   log.info "    --help"
   log.info "       show this help"
   log.info "    --verbose"
   log.info "       Adds more verbosity to workflow"
-}
-
-workflow.onComplete {
-  Utils.endMessage(log, workflow, config, params, inputPath)
 }
 
 workflow.onError {
