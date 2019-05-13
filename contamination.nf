@@ -226,7 +226,7 @@ normals.join(tumours).into { patientsConcordance; patientsContamination }
 process RunConcordance {
   tag {patient}
 
-  publishDir params.outDir
+  publishDir "${params.outDir}/concordance"
 
   input:
   set patient, nSample, nPileup, tSample, tPileup from patientsConcordance
@@ -237,8 +237,8 @@ process RunConcordance {
   script:
   """
   verify_concordance.py \
-   -T ${input.tPileup} \
-   -N ${input.nPileupp} \
+   -T ${tPileup} \
+   -N ${nPileup} \
    -g ${params.genome} \
    -O ${patient}.txt \
    -H \
@@ -249,7 +249,7 @@ process RunConcordance {
 process RunContamination {
   tag {patient}
 
-  publishDir params.outDir
+  publishDir "${params.outDir}/contamination"
 
   input:
   set patient, nSample, nPileup, tSample, tPileup from patientsContamination
@@ -260,14 +260,25 @@ process RunContamination {
   script:
   """
   estimate_tumor_normal_contamination.py \
-   -T ${input.tPileup} \
-   -N ${input.nPileup} \
+   -T ${tPileup} \
+   -N ${nPileup} \
    -g ${params.genome} \
    | tee \
-   >(grep Tumor | sed 's/Tumor sample/Sample/' > ${tSample}_normal_cont.txt \
+   >(grep Tumor | sed 's/Tumor sample/Sample/' > ${tSample}_normal_cont.txt) \
    | grep Normal | sed 's/Normal sample/Sample/' > ${nSample}_tumour_cont.txt
 """
 }
+
+concordance.toList().subscribe onNext: { results -> results.each { patient, concFile ->
+  def conc = file(concFile).readLines().find { it -> it.startsWith('Concordance') }
+  conc = conc.trim() -~/Concordance: /
+  log.info "${patient} T/N concordance: ${conc}"
+}}
+contamination.toList().subscribe onNext: { results -> results.each { patient, nFile, tFile ->
+  def n = file(nFile).getText().trim() -~/Sample contamination level: /
+  def t = file(tFile).getText().trim() -~/Sample contamination level: /
+  log.info "${patient} normal: ${n}, tumor: ${t}"
+}}
 
 /*
 ================================================================================
